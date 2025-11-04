@@ -165,12 +165,21 @@ export class HoloRenderer extends THREE.Mesh {
         // Generate connected mesh geometry
         this.connectedMeshGeometry = this.generateConnectedMesh(projector);
         this.geometry = this.connectedMeshGeometry;
+        this.geometry.attributes.position.needsUpdate = true;
+        if (this.geometry.attributes.uv) {
+          this.geometry.attributes.uv.needsUpdate = true;
+        }
         console.log("HoloRenderer: Switched to connected mesh geometry");
+      } else if (this.geometry !== this.connectedMeshGeometry) {
+        // Ensure we're using the connected mesh geometry
+        this.geometry = this.connectedMeshGeometry;
+        this.geometry.attributes.position.needsUpdate = true;
       }
     } else {
       // Billboard mode (instanced)
       if (this.geometry !== this.instancedGeometry) {
         this.geometry = this.instancedGeometry;
+        this.geometry.attributes.position.needsUpdate = true;
       }
       (this.geometry as THREE.InstancedBufferGeometry).instanceCount = numPixels;
     }
@@ -227,18 +236,24 @@ export class HoloRenderer extends THREE.Mesh {
 
   // Set mesh mode (0 = billboard, 1 = connected mesh)
   setMeshMode(mode: number): void {
+    console.log('HoloRenderer: Setting mesh mode to', mode);
     this.currentMeshMode = mode;
     if (mode === 1) {
       // Connected mesh mode
       this.uniforms.meshMode.value = 1.0;
+      console.log('  meshMode uniform set to:', this.uniforms.meshMode.value);
       // Geometry will be swapped in renderProjector
     } else {
       // Billboard mode - use instanced geometry
-      this.uniforms.meshMode.value = 0;
+      this.uniforms.meshMode.value = 0.0;
+      console.log('  meshMode uniform set to:', this.uniforms.meshMode.value);
       if (this.geometry !== this.instancedGeometry) {
         this.geometry = this.instancedGeometry;
+        this.geometry.attributes.position.needsUpdate = true;
       }
     }
+    // Force material update
+    this.material.needsUpdate = true;
   }
 
   // Cycle through mesh modes: 0 -> 1 -> 0
