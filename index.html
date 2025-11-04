@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LIF Renderer Demo</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: monospace;
+    }
+
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 15px;
+      border-radius: 5px;
+      z-index: 100;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="info">
+    LIF Renderer Demo<br>
+    FPS: <span id="fps">60</span><br>
+    Points: <span id="point-count">0</span><br>
+    Mode: <span id="mode">Free Camera</span><br>
+    <span id="controls">
+      WASD+QE: Move camera<br>
+      Click/Touch: Look around<br>
+      Double Click/Tap: Orbit point<br>
+      2 Fingers: Pan/Zoom<br>
+      R/Long Press: Reset view<br>
+      M: Toggle mesh mode<br>
+      F: Toggle frustum
+    </span>
+  </div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.173.0/build/three.module.js";
+    import { HoloProjector, HoloRenderer } from "./src/index.ts";
+
+    // Scene setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(
+      60,
+      window.innerWidth / window.innerHeight,
+      0.0001,
+      5000
+    );
+    camera.position.set(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setClearColor(0x111111);
+    document.body.appendChild(renderer.domElement);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // SFMoMA restaurant scene data
+    const fullWidth = 1280;
+    const fullHeight = 800;
+    const width = fullWidth;
+    const height = fullHeight;
+
+    document.getElementById('point-count').textContent = (width * height).toLocaleString();
+
+    // Create holographic projector
+    const projector = new HoloProjector({
+      rgbUrl: './assets/rgb.jpg',
+      depthUrl: './assets/depth.png',
+      intrinsics: {
+        fx: 0.78 * fullWidth,
+        fy: 0.78 * fullWidth,
+        cx: width / 2,
+        cy: height / 2,
+      },
+      invDepthRange: {
+        min: 0.09,
+        max: 0.0001,
+        baseline: 0.045,
+      },
+      width,
+      height,
+      onLoad: () => console.log('Projector loaded!')
+    });
+
+    scene.add(projector);
+
+    // Add helpers
+    const axesHelper = new THREE.AxesHelper(0.5);
+    projector.add(axesHelper);
+
+    const gridHelper = new THREE.GridHelper(10, 10);
+    scene.add(gridHelper);
+
+    // Helper function to find HoloRenderer in scene
+    function findHoloRenderer() {
+      let renderer = null;
+      scene.traverse((obj) => {
+        if (obj instanceof HoloRenderer) {
+          renderer = obj;
+        }
+      });
+      return renderer;
+    }
+
+    // Camera controls
+    const moveState = {
+      forward: false,
+      backward: false,
+      left: false,
+      right: false,
+      up: false,
+      down: false,
+    };
+
+    const mouseSensitivity = 0.002;
+    const moveSpeed = 2.0;
+    const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+    // Orbit mode state
+    let isOrbitMode = false;
+    let orbitCenter = new THREE.Vector3();
+    let orbitDistance = 5.0;
+    let orbitPhi = 0;
+    let orbitTheta = 0;
+
+    // Camera animation state
+    let isAnimating = false;
+    let animationProgress = 0;
+    let animationStartPos = new THREE.Vector3();
+    let animationStartQuat = new THREE.Quaternion();
+    let animationTargetPos = new THREE.Vector3();
+    let animationTargetQuat = new THREE.Quaternion();
+    const animationDuration = 0.5;
+
+    // Keyboard controls
+    document.addEventListener('keydown', (e) => {
+      switch (e.code) {
+        case 'KeyW': moveState.forward = true; break;
+        case 'KeyS': moveState.backward = true; break;
+        case 'KeyA': moveState.left = true; break;
+        case 'KeyD': moveState.right = true; break;
+        case 'KeyE': moveState.up = true; break;
+        case 'KeyQ': moveState.down = true; break;
+        case 'Escape':
+          if (isOrbitMode) {
+            isOrbitMode = false;
+            isAnimating = false;
+            document.getElementById('mode').textContent = 'Free Camera';
+            document.getElementById('controls').innerHTML =
+              'WASD+QE: Move camera<br>' +
+              'Click/Touch: Look around<br>' +
+              'Double Click/Tap: Orbit point<br>' +
+              '2 Fingers: Pan/Zoom<br>' +
+              'R/Long Press: Reset view<br>' +
+              'F: Toggle frustum';
+          }
+          break;
+        case 'KeyF':
+          projector.frustumHelper.visible = !projector.frustumHelper.visible;
+          break;
+        case 'KeyR':
+          // Reset view to origin
+          camera.position.set(0, 0, 0);
+          camera.quaternion.set(0, 0, 0, 1);
+          isOrbitMode = false;
+          isAnimating = false;
+          document.getElementById('mode').textContent = 'Free Camera';
+          document.getElementById('controls').innerHTML =
+            'WASD+QE: Move camera<br>' +
+            'Click/Touch: Look around<br>' +
+            'Double Click/Tap: Orbit point<br>' +
+            '2 Fingers: Pan/Zoom<br>' +
+            'R/Long Press: Reset view<br>' +
+            'M: Toggle mesh mode<br>' +
+            'F: Toggle frustum';
+          break;
+        case 'KeyM':
+          // Cycle mesh mode
+          const holoRenderer = findHoloRenderer();
+          if (holoRenderer) {
+            const meshMode = holoRenderer.cycleMeshMode();
+            const modeNames = ['Billboard', 'Connected Mesh'];
+            console.log('Mesh mode:', modeNames[meshMode]);
+          }
+          break;
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      switch (e.code) {
+        case 'KeyW': moveState.forward = false; break;
+        case 'KeyS': moveState.backward = false; break;
+        case 'KeyA': moveState.left = false; break;
+        case 'KeyD': moveState.right = false; break;
+        case 'KeyE': moveState.up = false; break;
+        case 'KeyQ': moveState.down = false; break;
+      }
+    });
+
+    // Raycast for double-click orbit
+    function raycastPointCloud(mouseX, mouseY) {
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+      const ray = raycaster.ray;
+
+      // Get projector transform
+      projector.updateMatrixWorld();
+      const projectorMatrix = projector.matrixWorld.clone();
+
+      // Sample points from the depth map (sample every 4th pixel for performance)
+      const sampleStep = 4;
+      let closestPoint = null;
+      let closestDistance = Infinity;
+
+      for (let y = 0; y < height; y += sampleStep) {
+        for (let x = 0; x < width; x += sampleStep) {
+          // Reconstruct position using same logic as shader
+          const pixelX = x;
+          const pixelY = y;
+
+          // Test multiple depths to find the closest intersection
+          const depthSamples = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0];
+
+          for (const testDepth of depthSamples) {
+            // Reconstruct position in projector camera space
+            const fx = projector.intrinsics.fx;
+            const fy = projector.intrinsics.fy;
+            const cx = projector.intrinsics.cx;
+            const cy = projector.intrinsics.cy;
+
+            const posCamera = new THREE.Vector3(
+              (pixelX + 0.5 - cx) * testDepth / fx,
+              (pixelY + 0.5 - cy) * testDepth / fy,
+              -testDepth
+            );
+
+            // Transform to world space
+            const posWorld = posCamera.applyMatrix4(projectorMatrix);
+
+            // Check distance to ray
+            const distance = ray.distanceToPoint(posWorld);
+
+            if (distance < closestDistance && distance < 0.5) { // Within 0.5 units of ray
+              closestDistance = distance;
+              closestPoint = posWorld.clone();
+            }
+          }
+        }
+      }
+
+      return closestPoint;
+    }
+
+    // Double-click to enter orbit mode
+    renderer.domElement.addEventListener('dblclick', (e) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      const hitPoint = raycastPointCloud(mouseX, mouseY);
+
+      if (hitPoint) {
+        orbitCenter.copy(hitPoint);
+        orbitDistance = camera.position.distanceTo(orbitCenter);
+
+        const offset = new THREE.Vector3().subVectors(camera.position, orbitCenter);
+        orbitTheta = Math.atan2(offset.x, offset.z);
+        orbitPhi = Math.acos(offset.y / orbitDistance);
+
+        const x = orbitDistance * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+        const y = orbitDistance * Math.cos(orbitPhi);
+        const z = orbitDistance * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+
+        animationStartPos.copy(camera.position);
+        animationStartQuat.copy(camera.quaternion);
+        animationTargetPos.copy(orbitCenter).add(new THREE.Vector3(x, y, z));
+
+        const tempCamera = new THREE.PerspectiveCamera();
+        tempCamera.position.copy(animationTargetPos);
+        tempCamera.lookAt(orbitCenter);
+        animationTargetQuat.copy(tempCamera.quaternion);
+
+        isAnimating = true;
+        animationProgress = 0;
+        isOrbitMode = true;
+
+        document.getElementById('mode').textContent = 'Orbit Mode';
+        document.getElementById('controls').innerHTML =
+          'Click/Touch: Rotate orbit<br>' +
+          'Pinch: Zoom<br>' +
+          'Wheel: Zoom<br>' +
+          'R/Long Press: Reset view<br>' +
+          'Escape: Exit orbit mode<br>' +
+          'F: Toggle frustum';
+      }
+    });
+
+    // Mouse controls
+    let isDragging = false;
+    let previousMousePosition = { x: 0, y: 0 };
+
+    renderer.domElement.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        isDragging = true;
+        previousMousePosition = { x: e.clientX, y: e.clientY };
+      }
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0) {
+        isDragging = false;
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+
+      if (isAnimating) {
+        isAnimating = false;
+      }
+
+      const deltaX = e.clientX - previousMousePosition.x;
+      const deltaY = e.clientY - previousMousePosition.y;
+
+      if (isOrbitMode) {
+        orbitTheta -= deltaX * mouseSensitivity;
+        orbitPhi -= deltaY * mouseSensitivity;
+        orbitPhi = Math.max(0.1, Math.min(Math.PI - 0.1, orbitPhi));
+
+        const x = orbitDistance * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+        const y = orbitDistance * Math.cos(orbitPhi);
+        const z = orbitDistance * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+
+        camera.position.copy(orbitCenter).add(new THREE.Vector3(x, y, z));
+        camera.lookAt(orbitCenter);
+      } else {
+        euler.setFromQuaternion(camera.quaternion);
+        euler.y -= deltaX * mouseSensitivity;
+        euler.x -= deltaY * mouseSensitivity;
+        euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+        camera.quaternion.setFromEuler(euler);
+      }
+
+      previousMousePosition = { x: e.clientX, y: e.clientY };
+    });
+
+    // Mouse wheel for zoom
+    renderer.domElement.addEventListener('wheel', (e) => {
+      if (isOrbitMode) {
+        e.preventDefault();
+
+        if (isAnimating) {
+          isAnimating = false;
+        }
+
+        const zoomSpeed = 0.001;
+        orbitDistance += e.deltaY * zoomSpeed * orbitDistance;
+        orbitDistance = Math.max(0.1, Math.min(1000, orbitDistance));
+
+        const x = orbitDistance * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+        const y = orbitDistance * Math.cos(orbitPhi);
+        const z = orbitDistance * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+
+        camera.position.copy(orbitCenter).add(new THREE.Vector3(x, y, z));
+        camera.lookAt(orbitCenter);
+      }
+    });
+
+    // Touch controls for mobile
+    let touches = [];
+    let lastTouchDistance = 0;
+    let lastTouchCenter = { x: 0, y: 0 };
+    let lastTapTime = 0;
+    let lastTapPosition = { x: 0, y: 0 };
+    let touchStartTime = 0;
+    let touchStartPosition = { x: 0, y: 0 };
+    let longPressTimer = null;
+
+    renderer.domElement.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      touches = Array.from(e.touches);
+
+      if (touches.length === 1) {
+        // Track for double tap and long press
+        touchStartTime = Date.now();
+        touchStartPosition = { x: touches[0].clientX, y: touches[0].clientY };
+
+        // Set up long press detection (800ms)
+        longPressTimer = setTimeout(() => {
+          // Reset view on long press
+          camera.position.set(0, 0, 0);
+          camera.quaternion.set(0, 0, 0, 1);
+          isOrbitMode = false;
+          isAnimating = false;
+          document.getElementById('mode').textContent = 'Free Camera';
+          document.getElementById('controls').innerHTML =
+            'WASD+QE: Move camera<br>' +
+            'Click/Touch: Look around<br>' +
+            'Double Click/Tap: Orbit point<br>' +
+            '2 Fingers: Pan/Zoom<br>' +
+            'R/Long Press: Reset view<br>' +
+            'M: Toggle mesh mode<br>' +
+            'F: Toggle frustum';
+        }, 800);
+      } else if (touches.length === 2) {
+        // Cancel long press if second finger added
+        if (longPressTimer) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
+
+        // Calculate initial distance for pinch
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
+
+        // Calculate center point for two-finger pan
+        lastTouchCenter = {
+          x: (touches[0].clientX + touches[1].clientX) / 2,
+          y: (touches[0].clientY + touches[1].clientY) / 2
+        };
+      }
+    }, { passive: false });
+
+    renderer.domElement.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      touches = Array.from(e.touches);
+
+      // Cancel long press on move
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+
+      if (touches.length === 2 && !isOrbitMode && !isAnimating) {
+        // Two-finger gestures in free camera mode
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        const currentDistance = Math.sqrt(dx * dx + dy * dy);
+
+        const currentCenter = {
+          x: (touches[0].clientX + touches[1].clientX) / 2,
+          y: (touches[0].clientY + touches[1].clientY) / 2
+        };
+
+        // Pinch to zoom (move forward/backward) - halved sensitivity
+        const distanceDelta = currentDistance - lastTouchDistance;
+        const zoomSpeed = 0.005;
+        const forward = new THREE.Vector3(0, 0, -1);
+        forward.applyQuaternion(camera.quaternion);
+        camera.position.addScaledVector(forward, distanceDelta * zoomSpeed);
+
+        // Two-finger pan for translation (up/down, left/right) - halved and inverted
+        const centerDeltaX = currentCenter.x - lastTouchCenter.x;
+        const centerDeltaY = currentCenter.y - lastTouchCenter.y;
+        const panSpeed = 0.0025;
+
+        const right = new THREE.Vector3(1, 0, 0);
+        right.applyQuaternion(camera.quaternion);
+        camera.position.addScaledVector(right, -centerDeltaX * panSpeed);
+
+        const up = new THREE.Vector3(0, 1, 0);
+        camera.position.addScaledVector(up, centerDeltaY * panSpeed);
+
+        lastTouchDistance = currentDistance;
+        lastTouchCenter = currentCenter;
+      } else if (touches.length === 2 && isOrbitMode) {
+        // Two-finger gestures in orbit mode - pinch zoom only
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        const currentDistance = Math.sqrt(dx * dx + dy * dy);
+
+        if (isAnimating) {
+          isAnimating = false;
+        }
+
+        // Pinch to change orbit distance - halved sensitivity
+        const distanceDelta = currentDistance - lastTouchDistance;
+        const zoomSpeed = 0.005;
+        orbitDistance -= distanceDelta * zoomSpeed;
+        orbitDistance = Math.max(0.1, Math.min(1000, orbitDistance));
+
+        const x = orbitDistance * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+        const y = orbitDistance * Math.cos(orbitPhi);
+        const z = orbitDistance * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+
+        camera.position.copy(orbitCenter).add(new THREE.Vector3(x, y, z));
+        camera.lookAt(orbitCenter);
+
+        lastTouchDistance = currentDistance;
+      } else if (touches.length === 1 && !isOrbitMode && !isAnimating) {
+        // Single finger drag for look around (like mouse drag)
+        const touch = touches[0];
+        if (previousMousePosition.x !== 0) {
+          const deltaX = touch.clientX - previousMousePosition.x;
+          const deltaY = touch.clientY - previousMousePosition.y;
+
+          euler.setFromQuaternion(camera.quaternion);
+          euler.y -= deltaX * mouseSensitivity;
+          euler.x -= deltaY * mouseSensitivity;
+          euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+          camera.quaternion.setFromEuler(euler);
+        }
+        previousMousePosition = { x: touch.clientX, y: touch.clientY };
+      } else if (touches.length === 1 && isOrbitMode) {
+        // Single finger drag to rotate orbit
+        const touch = touches[0];
+        if (previousMousePosition.x !== 0) {
+          const deltaX = touch.clientX - previousMousePosition.x;
+          const deltaY = touch.clientY - previousMousePosition.y;
+
+          if (isAnimating) {
+            isAnimating = false;
+          }
+
+          const rotateSpeed = 0.005;
+          orbitTheta -= deltaX * rotateSpeed;
+          orbitPhi -= deltaY * rotateSpeed;
+          orbitPhi = Math.max(0.1, Math.min(Math.PI - 0.1, orbitPhi));
+
+          const x = orbitDistance * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+          const y = orbitDistance * Math.cos(orbitPhi);
+          const z = orbitDistance * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+
+          camera.position.copy(orbitCenter).add(new THREE.Vector3(x, y, z));
+          camera.lookAt(orbitCenter);
+        }
+        previousMousePosition = { x: touch.clientX, y: touch.clientY };
+      }
+    }, { passive: false });
+
+    renderer.domElement.addEventListener('touchend', (e) => {
+      e.preventDefault();
+
+      // Cancel long press timer
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+
+      const endTime = Date.now();
+      const endPosition = { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+
+      touches = Array.from(e.touches);
+
+      if (touches.length < 2) {
+        lastTouchDistance = 0;
+      }
+
+      if (touches.length === 0) {
+        previousMousePosition = { x: 0, y: 0 };
+
+        // Check for double tap (like double click)
+        const tapDuration = endTime - touchStartTime;
+        const tapDistance = Math.sqrt(
+          Math.pow(endPosition.x - touchStartPosition.x, 2) +
+          Math.pow(endPosition.y - touchStartPosition.y, 2)
+        );
+        const timeSinceLastTap = endTime - lastTapTime;
+        const distanceFromLastTap = Math.sqrt(
+          Math.pow(endPosition.x - lastTapPosition.x, 2) +
+          Math.pow(endPosition.y - lastTapPosition.y, 2)
+        );
+
+        // It's a tap if: quick (< 300ms), minimal movement (< 10px)
+        const isTap = tapDuration < 300 && tapDistance < 10;
+
+        if (isTap && timeSinceLastTap < 300 && distanceFromLastTap < 50) {
+          // Double tap detected - enter orbit mode
+          const rect = renderer.domElement.getBoundingClientRect();
+          const mouseX = ((endPosition.x - rect.left) / rect.width) * 2 - 1;
+          const mouseY = -((endPosition.y - rect.top) / rect.height) * 2 + 1;
+
+          const hitPoint = raycastPointCloud(mouseX, mouseY);
+
+          if (hitPoint) {
+            orbitCenter.copy(hitPoint);
+            orbitDistance = camera.position.distanceTo(orbitCenter);
+
+            const offset = new THREE.Vector3().subVectors(camera.position, orbitCenter);
+            orbitTheta = Math.atan2(offset.x, offset.z);
+            orbitPhi = Math.acos(offset.y / orbitDistance);
+
+            const x = orbitDistance * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+            const y = orbitDistance * Math.cos(orbitPhi);
+            const z = orbitDistance * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+
+            animationStartPos.copy(camera.position);
+            animationStartQuat.copy(camera.quaternion);
+            animationTargetPos.copy(orbitCenter).add(new THREE.Vector3(x, y, z));
+
+            const tempCamera = new THREE.PerspectiveCamera();
+            tempCamera.position.copy(animationTargetPos);
+            tempCamera.lookAt(orbitCenter);
+            animationTargetQuat.copy(tempCamera.quaternion);
+
+            isAnimating = true;
+            animationProgress = 0;
+            isOrbitMode = true;
+
+            document.getElementById('mode').textContent = 'Orbit Mode';
+            document.getElementById('controls').innerHTML =
+              'Click/Touch: Rotate orbit<br>' +
+              'Pinch: Zoom<br>' +
+              'Wheel: Zoom<br>' +
+              'R/Long Press: Reset view<br>' +
+              'Escape: Exit orbit mode<br>' +
+              'F: Toggle frustum';
+          }
+
+          // Reset for next double tap detection
+          lastTapTime = 0;
+          lastTapPosition = { x: 0, y: 0 };
+        } else if (isTap) {
+          // Single tap - record for potential double tap
+          lastTapTime = endTime;
+          lastTapPosition = endPosition;
+        }
+      }
+    }, { passive: false });
+
+    // Animation loop
+    let lastTime = 0;
+    let frameCount = 0;
+    let fpsFrameCount = 0;
+    let fpsUpdateTime = 0;
+
+    renderer.setAnimationLoop((time) => {
+      const deltaTime = (time - lastTime) / 1000;
+      lastTime = time;
+      frameCount++;
+      fpsFrameCount++;
+
+      // Update FPS counter
+      if (time - fpsUpdateTime >= 500) {
+        const fps = Math.round((fpsFrameCount * 1000) / (time - fpsUpdateTime));
+        document.getElementById('fps').textContent = fps;
+        fpsFrameCount = 0;
+        fpsUpdateTime = time;
+      }
+
+      // Camera animation
+      if (isAnimating) {
+        animationProgress += deltaTime / animationDuration;
+
+        if (animationProgress >= 1.0) {
+          animationProgress = 1.0;
+          isAnimating = false;
+        }
+
+        const t = animationProgress < 0.5
+          ? 2 * animationProgress * animationProgress
+          : 1 - Math.pow(-2 * animationProgress + 2, 2) / 2;
+
+        camera.position.lerpVectors(animationStartPos, animationTargetPos, t);
+        camera.quaternion.slerpQuaternions(animationStartQuat, animationTargetQuat, t);
+      }
+
+      // WASD movement
+      if (!isOrbitMode && !isAnimating) {
+        const moveVector = new THREE.Vector3();
+        if (moveState.forward) moveVector.z -= 1;
+        if (moveState.backward) moveVector.z += 1;
+        if (moveState.left) moveVector.x -= 1;
+        if (moveState.right) moveVector.x += 1;
+        if (moveState.up) moveVector.y += 1;
+        if (moveState.down) moveVector.y -= 1;
+
+        if (moveVector.lengthSq() > 0) {
+          moveVector.normalize();
+          moveVector.applyQuaternion(camera.quaternion);
+          moveVector.multiplyScalar(moveSpeed * deltaTime);
+          camera.position.add(moveVector);
+        }
+      }
+
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+
+</html>
