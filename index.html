@@ -185,6 +185,7 @@
             '2 Fingers: Pan/Zoom<br>' +
             'R/Long Press: Reset view<br>' +
             'M: Toggle mesh mode<br>' +
+            'G: Toggle gradient culling<br>' +
             'F: Toggle frustum';
           break;
         case 'KeyM':
@@ -194,6 +195,14 @@
             const meshMode = holoRenderer.cycleMeshMode();
             const modeNames = ['Billboard', 'Connected Mesh'];
             console.log('Mesh mode:', modeNames[meshMode]);
+          }
+          break;
+        case 'KeyG':
+          // Toggle steep face culling (gradient culling)
+          const holoRenderer2 = findHoloRenderer();
+          if (holoRenderer2) {
+            const cullEnabled = holoRenderer2.toggleSteepFaceCulling();
+            console.log('Gradient culling:', cullEnabled ? 'ON (hide steep faces)' : 'OFF (show all)');
           }
           break;
       }

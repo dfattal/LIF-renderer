@@ -115,6 +115,7 @@ export class HoloRenderer extends THREE.Mesh {
       maxStdDev: { value: 1.0 },
       pointSize: { value: 2.0 },
       meshMode: { value: 0.0 }, // 0 = billboard mode, 1 = connected mesh mode
+      cullSteepFaces: { value: 1.0 }, // 1 = cull steep/back-facing surfaces, 0 = show all
     };
   }
 
@@ -250,6 +251,18 @@ export class HoloRenderer extends THREE.Mesh {
   // Get current mesh mode
   getMeshMode(): number {
     return this.currentMeshMode;
+  }
+
+  // Toggle steep face culling (for mesh mode)
+  toggleSteepFaceCulling(): boolean {
+    const newValue = this.uniforms.cullSteepFaces.value > 0.5 ? 0.0 : 1.0;
+    this.uniforms.cullSteepFaces.value = newValue;
+    return newValue > 0.5;
+  }
+
+  // Get steep face culling state
+  getSteepFaceCulling(): boolean {
+    return this.uniforms.cullSteepFaces.value > 0.5;
   }
 
   // Generate connected mesh geometry from projector data

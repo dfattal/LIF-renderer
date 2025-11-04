@@ -24,6 +24,7 @@ uniform float invZMax;
 uniform float baseline;
 uniform float pointSize;
 uniform float meshMode; // 0 = billboard mode, 1 = mesh mode with normals
+uniform float cullSteepFaces; // 1 = cull steep/back-facing surfaces, 0 = show all
 
 // Constants for handling invZ = 0
 const float EPSILON = 1e-8;
@@ -226,6 +227,19 @@ void main() {
     // Discard points behind the camera (with small epsilon for numerical stability)
     if (posView.z >= -0.001) {
         return;
+    }
+
+    // For mesh mode: optionally cull back-facing triangles relative to projector
+    if (meshMode > 0.5 && cullSteepFaces > 0.5) {
+        // Compute surface normal from depth map
+        vec3 normal = computeSurfaceNormal(pixelX, pixelY, depth);
+
+        // Normal is in camera (projector) space
+        // Projector looks down -Z, so surfaces facing projector have normal.z > 0
+        // Cull if angle > 45 degrees (dot product < cos(45°) = 0.707)
+        if (normal.z < 0.7) {
+            return; // Cull this vertex
+        }
     }
 
     // Transform to clip space
