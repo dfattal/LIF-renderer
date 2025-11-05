@@ -293,7 +293,10 @@ export class HoloRenderer extends THREE.Mesh {
 
   // Generate connected mesh geometry from projector data
   // Vertices are at pixel CORNERS (shared between neighbors)
-  // Each pixel center is the center of a quad element
+  // Pixel (i,j) has vertices at (i,j), (i+1,j), (i+1,j+1), (i,j+1)
+  // Quad center is at (i+0.5, j+0.5) - the pixel center
+  // RGB is sampled at pixel centers via UV interpolation
+  // Depth at corners is averaged from 4 neighboring pixel centers
   private generateConnectedMesh(projector: HoloProjector): THREE.BufferGeometry {
     const width = projector.width;
     const height = projector.height;

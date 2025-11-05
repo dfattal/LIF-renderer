@@ -4,6 +4,12 @@ precision highp int;
 precision highp sampler2D;
 
 // Fragment shader for holographic projector rendering
+//
+// vColor: RGB color sampled in vertex shader (from interpolated vTexUV)
+//         In mesh mode, vTexUV is interpolated from corner UVs, so quad center
+//         gets pixel center UV, correctly sampling RGB at (i+0.5, j+0.5)
+// vQuadUV: Billboard quad coordinates (used in billboard mode for edge softening)
+// vTexUV: Interpolated texture coordinates
 
 in vec4 vColor;
 in vec2 vQuadUV;

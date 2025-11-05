@@ -4,7 +4,20 @@ precision highp int;
 precision highp sampler2D;
 
 // Vertex shader for holographic projector rendering
-// Each instance represents one pixel in the projector's image
+//
+// BILLBOARD MODE (meshMode=0):
+//   Each instance represents one pixel in the projector's image
+//   Vertices positioned at pixel centers (i+0.5, j+0.5)
+//   RGB sampled from pixel center
+//   Depth sampled from pixel center
+//
+// MESH MODE (meshMode=1):
+//   Vertices at pixel corners (i, j)
+//   Pixel (i,j) has quad with corners: (i,j), (i+1,j), (i+1,j+1), (i,j+1)
+//   Quad center at (i+0.5, j+0.5)
+//   RGB sampled at pixel center (i+0.5, j+0.5) via UV interpolation
+//   Vertex depth averaged from 4 neighboring pixel centers
+//
 // Note: position and uv attributes are automatically provided by THREE.js
 
 out vec4 vColor;
@@ -50,46 +63,42 @@ float getDepth(vec2 uv) {
     return baseline / invZ;
 }
 
-// Helper function to sample depth with bilinear interpolation from 4 surrounding pixels
-float sampleInterpolatedDepth(vec2 cornerPixelCoord) {
+// Helper function to average depth from 4 neighboring pixels
+// For corner at (i,j), average depths from pixels (i-1,j-1), (i,j-1), (i-1,j), (i,j)
+float sampleAveragedDepth(vec2 cornerPixelCoord) {
     // cornerPixelCoord is in pixel coordinates (0 to width, 0 to height)
-    // We need to sample from the 4 surrounding pixel CENTERS
+    // For corner (i,j), we need to average from 4 surrounding pixel centers
 
-    // Get the 4 surrounding pixel center coordinates
-    float px = cornerPixelCoord.x - 0.5;  // Offset to pixel centers
-    float py = cornerPixelCoord.y - 0.5;
+    float cx = cornerPixelCoord.x;
+    float cy = cornerPixelCoord.y;
 
-    // Get integer pixel indices and fractional parts for interpolation
-    float px0 = floor(px);
-    float py0 = floor(py);
-    float px1 = px0 + 1.0;
-    float py1 = py0 + 1.0;
-    float fx = fract(px);
-    float fy = fract(py);
+    // The 4 pixels sharing this corner:
+    // Top-left:    (cx-1, cy-1)
+    // Top-right:   (cx, cy-1)
+    // Bottom-left: (cx-1, cy)
+    // Bottom-right:(cx, cy)
 
-    // Clamp to valid pixel range
-    px0 = clamp(px0, 0.0, imageWidth - 1.0);
-    px1 = clamp(px1, 0.0, imageWidth - 1.0);
-    py0 = clamp(py0, 0.0, imageHeight - 1.0);
-    py1 = clamp(py1, 0.0, imageHeight - 1.0);
+    // Clamp to valid pixel range [0, width-1] and [0, height-1]
+    float px0 = max(0.0, cx - 1.0);
+    float px1 = min(imageWidth - 1.0, cx);
+    float py0 = max(0.0, cy - 1.0);
+    float py1 = min(imageHeight - 1.0, cy);
 
     // Sample depth at 4 pixel centers
-    vec2 uv00 = (vec2(px0, py0) + 0.5) / vec2(imageWidth, imageHeight);
-    vec2 uv10 = (vec2(px1, py0) + 0.5) / vec2(imageWidth, imageHeight);
-    vec2 uv01 = (vec2(px0, py1) + 0.5) / vec2(imageWidth, imageHeight);
-    vec2 uv11 = (vec2(px1, py1) + 0.5) / vec2(imageWidth, imageHeight);
+    vec2 uvTopLeft = (vec2(px0, py0) + 0.5) / vec2(imageWidth, imageHeight);
+    vec2 uvTopRight = (vec2(px1, py0) + 0.5) / vec2(imageWidth, imageHeight);
+    vec2 uvBottomLeft = (vec2(px0, py1) + 0.5) / vec2(imageWidth, imageHeight);
+    vec2 uvBottomRight = (vec2(px1, py1) + 0.5) / vec2(imageWidth, imageHeight);
 
-    float depth00 = getDepth(uv00);
-    float depth10 = getDepth(uv10);
-    float depth01 = getDepth(uv01);
-    float depth11 = getDepth(uv11);
+    float depthTopLeft = getDepth(uvTopLeft);
+    float depthTopRight = getDepth(uvTopRight);
+    float depthBottomLeft = getDepth(uvBottomLeft);
+    float depthBottomRight = getDepth(uvBottomRight);
 
-    // Bilinear interpolation
-    float depth0 = mix(depth00, depth10, fx);
-    float depth1 = mix(depth01, depth11, fx);
-    float depth = mix(depth0, depth1, fy);
+    // Simple average of the 4 depths
+    float avgDepth = (depthTopLeft + depthTopRight + depthBottomLeft + depthBottomRight) * 0.25;
 
-    return depth;
+    return avgDepth;
 }
 
 void main() {
@@ -102,14 +111,16 @@ void main() {
 
     if (meshMode > 0.5) {
         // CONNECTED MESH MODE: Vertices are at pixel corners
-        // UV contains corner coordinates (normalized)
+        // UV contains corner coordinates (normalized 0 to 1)
         vec2 cornerPixelCoord = uv * vec2(imageWidth, imageHeight);
 
-        // Interpolate depth from 4 surrounding pixel centers
-        depth = sampleInterpolatedDepth(cornerPixelCoord);
+        // Average depth from 4 surrounding pixel centers
+        depth = sampleAveragedDepth(cornerPixelCoord);
 
-        // For color sampling, use the corner UV directly
-        // (will blend colors from surrounding pixels)
+        // For color sampling in the fragment shader, we want to identify which pixel
+        // this vertex belongs to. However, corner vertices are shared by multiple pixels.
+        // We'll pass the corner UV and let the fragment shader handle interpolation.
+        // The fragment shader will naturally interpolate between pixel centers.
         texUV = uv;
 
         // Pixel coordinates for this corner (used for 3D reconstruction)
@@ -138,11 +149,12 @@ void main() {
     }
 
     // Reconstruct 3D position in projector's camera space
-    // For connected mesh mode: use corner coordinates directly (no +0.5 offset)
+    // For connected mesh mode: corner at pixel coordinate (i,j) is placed at ray for (i,j)
     // For billboard mode: use pixel center coordinates (with +0.5 offset)
     vec3 posCamera;
     if (meshMode > 0.5) {
-        // CONNECTED MESH: Corner is at exact pixel coordinate
+        // CONNECTED MESH: Corner is at exact pixel coordinate (i,j)
+        // Using averaged depth from 4 surrounding pixel centers
         vec2 cornerPixelCoord = uv * vec2(imageWidth, imageHeight);
         posCamera = vec3(
             (cornerPixelCoord.x - cx) * depth / fx,
@@ -150,7 +162,7 @@ void main() {
             -depth
         );
     } else {
-        // BILLBOARD: Pixel center has +0.5 offset
+        // BILLBOARD: Pixel center at (i+0.5, j+0.5)
         posCamera = vec3(
             (float(pixelX) + 0.5 - cx) * depth / fx,
             (float(pixelY) + 0.5 - cy) * depth / fy,
