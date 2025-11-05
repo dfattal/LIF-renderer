@@ -20,6 +20,16 @@ uniform sampler2D depthTexture;
 uniform float invZMin;
 uniform float invZMax;
 
+// Linear to sRGB conversion (gamma correction)
+vec3 linearTosRGB(vec3 linear) {
+    // sRGB standard gamma curve
+    vec3 sRGB;
+    sRGB.r = (linear.r <= 0.0031308) ? linear.r * 12.92 : 1.055 * pow(linear.r, 1.0/2.4) - 0.055;
+    sRGB.g = (linear.g <= 0.0031308) ? linear.g * 12.92 : 1.055 * pow(linear.g, 1.0/2.4) - 0.055;
+    sRGB.b = (linear.b <= 0.0031308) ? linear.b * 12.92 : 1.055 * pow(linear.b, 1.0/2.4) - 0.055;
+    return sRGB;
+}
+
 void main() {
     // Output color - check visualization mode
     if (showNormals > 0.5) {
@@ -38,6 +48,9 @@ void main() {
         // Normal RGB rendering
         fragColor = vColor;
     }
+
+    // Apply linear to sRGB conversion for proper display
+    fragColor.rgb = linearTosRGB(fragColor.rgb);
 
     if (meshMode > 0.5) {
         // CONNECTED MESH MODE: Solid surface, no edge softening
