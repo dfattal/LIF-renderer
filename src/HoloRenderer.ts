@@ -115,9 +115,8 @@ export class HoloRenderer extends THREE.Mesh {
       maxStdDev: { value: 1.0 },
       pointSize: { value: 2.0 },
       meshMode: { value: 0.0 }, // 0 = billboard mode, 1 = connected mesh mode
-      cullSteepFaces: { value: 1.0 }, // 1 = cull steep/back-facing surfaces, 0 = show all
+      deltaInvZThreshold: { value: 0.0 }, // Discard mesh elements if invZ range exceeds this (0 = show all)
       showDepth: { value: 0.0 }, // 0 = show RGB, 1 = show depth visualization
-      showNormals: { value: 0.0 }, // 0 = show RGB, 1 = show normal Z projection visualization
     };
   }
 
@@ -270,16 +269,14 @@ export class HoloRenderer extends THREE.Mesh {
     return this.currentMeshMode;
   }
 
-  // Toggle steep face culling (for mesh mode)
-  toggleSteepFaceCulling(): boolean {
-    const newValue = this.uniforms.cullSteepFaces.value > 0.5 ? 0.0 : 1.0;
-    this.uniforms.cullSteepFaces.value = newValue;
-    return newValue > 0.5;
+  // Set gradient culling threshold (invZ range)
+  setGradientThreshold(threshold: number): void {
+    this.uniforms.deltaInvZThreshold.value = threshold;
   }
 
-  // Get steep face culling state
-  getSteepFaceCulling(): boolean {
-    return this.uniforms.cullSteepFaces.value > 0.5;
+  // Get gradient culling threshold
+  getGradientThreshold(): number {
+    return this.uniforms.deltaInvZThreshold.value;
   }
 
   // Toggle depth visualization (shows depth map instead of RGB texture)
@@ -292,18 +289,6 @@ export class HoloRenderer extends THREE.Mesh {
   // Get depth visualization state
   getDepthVisualization(): boolean {
     return this.uniforms.showDepth.value > 0.5;
-  }
-
-  // Toggle normal visualization (shows surface normal Z projection)
-  toggleNormalVisualization(): boolean {
-    const newValue = this.uniforms.showNormals.value > 0.5 ? 0.0 : 1.0;
-    this.uniforms.showNormals.value = newValue;
-    return newValue > 0.5;
-  }
-
-  // Get normal visualization state
-  getNormalVisualization(): boolean {
-    return this.uniforms.showNormals.value > 0.5;
   }
 
   // Generate connected mesh geometry from projector data

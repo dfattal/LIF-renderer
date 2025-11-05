@@ -8,14 +8,12 @@ precision highp sampler2D;
 in vec4 vColor;
 in vec2 vQuadUV;
 in vec2 vTexUV;
-in float vNormalZ;
 
 out vec4 fragColor;
 
 uniform float maxStdDev;
 uniform float meshMode;
 uniform float showDepth;
-uniform float showNormals;
 uniform sampler2D depthTexture;
 uniform float invZMin;
 uniform float invZMax;
@@ -32,13 +30,7 @@ vec3 linearTosRGB(vec3 linear) {
 
 void main() {
     // Output color - check visualization mode
-    if (showNormals > 0.5) {
-        // Normal visualization mode: show surface normal Z projection
-        // vNormalZ is already clamped to [0, 1] where:
-        // 0 = perpendicular to projector Z axis
-        // 1 = directly facing projector (parallel to Z axis)
-        fragColor = vec4(vec3(vNormalZ), 1.0);
-    } else if (showDepth > 0.5) {
+    if (showDepth > 0.5) {
         // Depth visualization mode: show depth as grayscale
         float depthValue = texture(depthTexture, vTexUV).r;
 

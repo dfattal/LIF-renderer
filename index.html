@@ -29,17 +29,12 @@
     FPS: <span id="fps">60</span><br>
     Points: <span id="point-count">0</span><br>
     Mode: <span id="mode">Free Camera</span><br>
-    <span id="controls">
-      WASD+QE: Move camera<br>
-      Click/Touch: Look around<br>
-      Double Click/Tap: Orbit point<br>
-      2 Fingers: Pan/Zoom<br>
-      R/Long Press: Reset view<br>
-      M: Toggle mesh mode<br>
-      V: Toggle depth view<br>
-      N: Toggle normal view<br>
-      F: Toggle frustum
-    </span>
+    <div style="margin-top: 10px;">
+      Gradient Filter: <span id="gradient-enabled">ON</span><br>
+      Threshold: <span id="gradient-value">0.0090</span><br>
+      <input type="range" id="gradient-slider" min="0" max="200" value="100" step="1" style="width: 200px;">
+    </div>
+    <span id="controls"></span>
   </div>
 
   <script type="module">
@@ -104,9 +99,6 @@
     const axesHelper = new THREE.AxesHelper(0.5);
     projector.add(axesHelper);
 
-    const gridHelper = new THREE.GridHelper(10, 10);
-    scene.add(gridHelper);
-
     // Helper function to find HoloRenderer in scene
     function findHoloRenderer() {
       let renderer = null;
@@ -148,6 +140,52 @@
     let animationTargetQuat = new THREE.Quaternion();
     const animationDuration = 0.5;
 
+    // Detect device type and set controls text
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                     ('ontouchstart' in window) ||
+                     (navigator.maxTouchPoints > 0);
+
+    const controlsElement = document.getElementById('controls');
+
+    // Function to update controls based on mode
+    function updateControls(mode) {
+      if (mode === 'free') {
+        if (isMobile) {
+          controlsElement.innerHTML =
+            'Touch: Look around<br>' +
+            'Double Tap: Orbit point<br>' +
+            '2 Fingers: Pan/Zoom<br>' +
+            'Long Press: Reset view';
+        } else {
+          controlsElement.innerHTML =
+            'WASD+QE: Move camera<br>' +
+            'Click+Drag: Look around<br>' +
+            'Double Click: Orbit point<br>' +
+            'R: Reset view<br>' +
+            'M: Toggle mesh mode<br>' +
+            'V: Toggle depth view<br>' +
+            'G: Toggle gradient filter<br>' +
+            'F: Toggle frustum';
+        }
+      } else if (mode === 'orbit') {
+        if (isMobile) {
+          controlsElement.innerHTML =
+            'Touch: Rotate orbit<br>' +
+            'Pinch: Zoom<br>' +
+            'Long Press: Reset view';
+        } else {
+          controlsElement.innerHTML =
+            'Click+Drag: Rotate orbit<br>' +
+            'Wheel: Zoom<br>' +
+            'R: Reset view<br>' +
+            'Escape: Exit orbit mode';
+        }
+      }
+    }
+
+    // Set initial controls for free camera mode
+    updateControls('free');
+
     // Keyboard controls
     document.addEventListener('keydown', (e) => {
       switch (e.code) {
@@ -162,16 +200,7 @@
             isOrbitMode = false;
             isAnimating = false;
             document.getElementById('mode').textContent = 'Free Camera';
-            document.getElementById('controls').innerHTML =
-              'WASD+QE: Move camera<br>' +
-              'Click/Touch: Look around<br>' +
-              'Double Click/Tap: Orbit point<br>' +
-              '2 Fingers: Pan/Zoom<br>' +
-              'R/Long Press: Reset view<br>' +
-              'M: Toggle mesh mode<br>' +
-              'V: Toggle depth view<br>' +
-              'N: Toggle normal view<br>' +
-              'F: Toggle frustum';
+            updateControls('free');
           }
           break;
         case 'KeyF':
@@ -184,17 +213,7 @@
           isOrbitMode = false;
           isAnimating = false;
           document.getElementById('mode').textContent = 'Free Camera';
-          document.getElementById('controls').innerHTML =
-            'WASD+QE: Move camera<br>' +
-            'Click/Touch: Look around<br>' +
-            'Double Click/Tap: Orbit point<br>' +
-            '2 Fingers: Pan/Zoom<br>' +
-            'R/Long Press: Reset view<br>' +
-            'M: Toggle mesh mode<br>' +
-            'V: Toggle depth view<br>' +
-            'N: Toggle normal view<br>' +
-            'G: Toggle gradient culling<br>' +
-            'F: Toggle frustum';
+          updateControls('free');
           break;
         case 'KeyM':
           // Cycle mesh mode
@@ -206,11 +225,26 @@
           }
           break;
         case 'KeyG':
-          // Toggle steep face culling (gradient culling)
+          // Toggle gradient filter
           const holoRenderer2 = findHoloRenderer();
           if (holoRenderer2) {
-            const cullEnabled = holoRenderer2.toggleSteepFaceCulling();
-            console.log('Gradient culling:', cullEnabled ? 'ON (hide steep faces)' : 'OFF (show all)');
+            const currentThreshold = holoRenderer2.getGradientThreshold();
+            const invZRange = 0.09 - 0.0001;
+            const defaultThreshold = invZRange * 0.10;
+
+            if (currentThreshold > 0.0) {
+              // Turn off
+              holoRenderer2.setGradientThreshold(0.0);
+              document.getElementById('gradient-enabled').textContent = 'OFF';
+              console.log('Gradient filter: OFF');
+            } else {
+              // Turn on with default threshold
+              holoRenderer2.setGradientThreshold(defaultThreshold);
+              document.getElementById('gradient-enabled').textContent = 'ON';
+              document.getElementById('gradient-value').textContent = defaultThreshold.toFixed(4);
+              document.getElementById('gradient-slider').value = '100';
+              console.log('Gradient filter: ON');
+            }
           }
           break;
         case 'KeyV':
@@ -219,14 +253,6 @@
           if (holoRenderer3) {
             const showDepth = holoRenderer3.toggleDepthVisualization();
             console.log('Depth visualization:', showDepth ? 'ON (show depth)' : 'OFF (show RGB)');
-          }
-          break;
-        case 'KeyN':
-          // Toggle normal visualization
-          const holoRenderer4 = findHoloRenderer();
-          if (holoRenderer4) {
-            const showNormals = holoRenderer4.toggleNormalVisualization();
-            console.log('Normal visualization:', showNormals ? 'ON (show normals)' : 'OFF (show RGB)');
           }
           break;
       }
@@ -240,6 +266,41 @@
         case 'KeyD': moveState.right = false; break;
         case 'KeyE': moveState.up = false; break;
         case 'KeyQ': moveState.down = false; break;
+      }
+    });
+
+    // Gradient threshold slider
+    const gradientSlider = document.getElementById('gradient-slider');
+    const gradientValue = document.getElementById('gradient-value');
+    const gradientEnabled = document.getElementById('gradient-enabled');
+    const invZRange = 0.09 - 0.0001; // invZMin - invZMax
+
+    // Set initial gradient threshold to 10% of range
+    const initialThreshold = invZRange * 0.10;
+
+    // Wait for renderer to be injected, then set initial settings
+    setTimeout(() => {
+      const holoRenderer = findHoloRenderer();
+      if (holoRenderer) {
+        holoRenderer.setGradientThreshold(initialThreshold);
+        holoRenderer.setMeshMode(1); // Start in mesh mode
+      }
+    }, 100);
+
+    gradientSlider.addEventListener('input', (e) => {
+      const holoRenderer = findHoloRenderer();
+      if (holoRenderer) {
+        // Map slider value [0, 200] to [0, 20% of invZRange]
+        const threshold = (parseFloat(e.target.value) / 1000.0) * invZRange;
+        holoRenderer.setGradientThreshold(threshold);
+        gradientValue.textContent = threshold.toFixed(4);
+
+        // Update enabled status
+        if (threshold > 0.0) {
+          gradientEnabled.textContent = 'ON';
+        } else {
+          gradientEnabled.textContent = 'OFF';
+        }
       }
     });
 
@@ -331,13 +392,7 @@
         isOrbitMode = true;
 
         document.getElementById('mode').textContent = 'Orbit Mode';
-        document.getElementById('controls').innerHTML =
-          'Click/Touch: Rotate orbit<br>' +
-          'Pinch: Zoom<br>' +
-          'Wheel: Zoom<br>' +
-          'R/Long Press: Reset view<br>' +
-          'Escape: Exit orbit mode<br>' +
-          'F: Toggle frustum';
+        updateControls('orbit');
       }
     });
 
@@ -439,17 +494,7 @@
           isOrbitMode = false;
           isAnimating = false;
           document.getElementById('mode').textContent = 'Free Camera';
-          document.getElementById('controls').innerHTML =
-            'WASD+QE: Move camera<br>' +
-            'Click/Touch: Look around<br>' +
-            'Double Click/Tap: Orbit point<br>' +
-            '2 Fingers: Pan/Zoom<br>' +
-            'R/Long Press: Reset view<br>' +
-            'M: Toggle mesh mode<br>' +
-            'V: Toggle depth view<br>' +
-            'N: Toggle normal view<br>' +
-            'G: Toggle gradient culling<br>' +
-            'F: Toggle frustum';
+          updateControls('free');
         }, 800);
       } else if (touches.length === 2) {
         // Cancel long press if second finger added
@@ -648,13 +693,7 @@
             isOrbitMode = true;
 
             document.getElementById('mode').textContent = 'Orbit Mode';
-            document.getElementById('controls').innerHTML =
-              'Click/Touch: Rotate orbit<br>' +
-              'Pinch: Zoom<br>' +
-              'Wheel: Zoom<br>' +
-              'R/Long Press: Reset view<br>' +
-              'Escape: Exit orbit mode<br>' +
-              'F: Toggle frustum';
+            updateControls('orbit');
           }
 
           // Reset for next double tap detection

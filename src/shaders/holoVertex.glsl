@@ -10,7 +10,6 @@ precision highp sampler2D;
 out vec4 vColor;
 out vec2 vQuadUV;
 out vec2 vTexUV;
-out float vNormalZ; // Surface normal Z component (in projector camera space)
 
 uniform sampler2D rgbTexture;
 uniform sampler2D depthTexture;
@@ -26,7 +25,7 @@ uniform float invZMax;
 uniform float baseline;
 uniform float pointSize;
 uniform float meshMode; // 0 = billboard mode, 1 = mesh mode with normals
-uniform float cullSteepFaces; // 1 = cull steep/back-facing surfaces, 0 = show all
+uniform float deltaInvZThreshold; // Discard mesh elements if invZ range exceeds this (0 = show all)
 
 // Constants for handling invZ = 0
 const float EPSILON = 1e-8;
@@ -49,63 +48,6 @@ float getDepth(vec2 uv) {
         return INF_Z;
     }
     return baseline / invZ;
-}
-
-// Compute surface normal from neighboring depth samples
-vec3 computeSurfaceNormal(int pixelX, int pixelY, float centerDepth) {
-    // Sample step (can adjust for smoother/sharper normals)
-    float step = 1.0;
-
-    // Clamp to valid pixel range
-    float leftX = max(0.0, float(pixelX) - step);
-    float rightX = min(imageWidth - 1.0, float(pixelX) + step);
-    float upY = max(0.0, float(pixelY) - step);
-    float downY = min(imageHeight - 1.0, float(pixelY) + step);
-
-    // Get depths for neighboring pixels
-    vec2 uvLeft = (vec2(leftX, float(pixelY)) + 0.5) / vec2(imageWidth, imageHeight);
-    vec2 uvRight = (vec2(rightX, float(pixelY)) + 0.5) / vec2(imageWidth, imageHeight);
-    vec2 uvUp = (vec2(float(pixelX), upY) + 0.5) / vec2(imageWidth, imageHeight);
-    vec2 uvDown = (vec2(float(pixelX), downY) + 0.5) / vec2(imageWidth, imageHeight);
-
-    float depthLeft = getDepth(uvLeft);
-    float depthRight = getDepth(uvRight);
-    float depthUp = getDepth(uvUp);
-    float depthDown = getDepth(uvDown);
-
-    // Reconstruct 3D positions
-    vec3 posCenter = reconstruct3D(float(pixelX), float(pixelY), centerDepth);
-    vec3 posLeft = reconstruct3D(leftX, float(pixelY), depthLeft);
-    vec3 posRight = reconstruct3D(rightX, float(pixelY), depthRight);
-    vec3 posUp = reconstruct3D(float(pixelX), upY, depthUp);
-    vec3 posDown = reconstruct3D(float(pixelX), downY, depthDown);
-
-    // Compute tangent vectors
-    vec3 tangentX = posRight - posLeft;
-    vec3 tangentY = posDown - posUp;
-
-    // Cross product to get normal (normalize)
-    vec3 normal = normalize(cross(tangentX, tangentY));
-
-    return normal;
-}
-
-// Build rotation matrix to align Z-axis with given normal
-mat3 buildRotationMatrix(vec3 normal) {
-    // Target: rotate (0,0,1) to align with normal
-    vec3 up = vec3(0.0, 0.0, 1.0);
-
-    // If normal is nearly aligned with up, use a default frame
-    if (abs(dot(normal, up)) > 0.999) {
-        return mat3(1.0);
-    }
-
-    // Build orthonormal basis with normal as the new Z
-    vec3 tangent = normalize(cross(up, normal));
-    vec3 bitangent = cross(normal, tangent);
-
-    // Rotation matrix (columns are the new basis vectors)
-    return mat3(tangent, bitangent, normal);
 }
 
 // Helper function to sample depth with bilinear interpolation from 4 surrounding pixels
@@ -229,26 +171,47 @@ void main() {
     // Pass texture UV to fragment shader for depth visualization
     vTexUV = texUV;
 
-    // Compute surface normal for visualization
-    vec3 surfaceNormal = computeSurfaceNormal(pixelX, pixelY, depth);
-    // Clamp normal.z to [0, 1] range (0 = perpendicular, 1 = facing projector)
-    // Projector looks down -Z, so surfaces facing it have positive normal.z
-    vNormalZ = max(0.0, surfaceNormal.z);
-
     // Discard points behind the camera (with small epsilon for numerical stability)
     if (posView.z >= -0.001) {
         return;
     }
 
-    // For mesh mode: optionally cull back-facing triangles relative to projector
-    if (meshMode > 0.5 && cullSteepFaces > 0.5) {
-        // Compute surface normal from depth map
-        vec3 normal = computeSurfaceNormal(pixelX, pixelY, depth);
+    // For mesh mode: optionally cull faces with steep depth gradients
+    if (meshMode > 0.5 && deltaInvZThreshold > 0.0) {
+        // Sample depth at current pixel and neighbors (1 pixel step)
+        float step = 1.0;
+        float leftX = max(0.0, float(pixelX) - step);
+        float rightX = min(imageWidth - 1.0, float(pixelX) + step);
+        float upY = max(0.0, float(pixelY) - step);
+        float downY = min(imageHeight - 1.0, float(pixelY) + step);
 
-        // Normal is in camera (projector) space
-        // Projector looks down -Z, so surfaces facing projector have normal.z > 0
-        // Cull if angle > 45 degrees (dot product < cos(45°) = 0.707)
-        if (normal.z < 0.7) {
+        // Get inverse depth values for neighboring pixels
+        vec2 uvCenter = (vec2(float(pixelX), float(pixelY)) + 0.5) / vec2(imageWidth, imageHeight);
+        vec2 uvLeft = (vec2(leftX, float(pixelY)) + 0.5) / vec2(imageWidth, imageHeight);
+        vec2 uvRight = (vec2(rightX, float(pixelY)) + 0.5) / vec2(imageWidth, imageHeight);
+        vec2 uvUp = (vec2(float(pixelX), upY) + 0.5) / vec2(imageWidth, imageHeight);
+        vec2 uvDown = (vec2(float(pixelX), downY) + 0.5) / vec2(imageWidth, imageHeight);
+
+        float invZCenter = texture(depthTexture, uvCenter).r;
+        float invZLeft = texture(depthTexture, uvLeft).r;
+        float invZRight = texture(depthTexture, uvRight).r;
+        float invZUp = texture(depthTexture, uvUp).r;
+        float invZDown = texture(depthTexture, uvDown).r;
+
+        // Convert from [0,1] texture values to actual inverse depth values
+        invZCenter = mix(invZMax, invZMin, invZCenter);
+        invZLeft = mix(invZMax, invZMin, invZLeft);
+        invZRight = mix(invZMax, invZMin, invZRight);
+        invZUp = mix(invZMax, invZMin, invZUp);
+        invZDown = mix(invZMax, invZMin, invZDown);
+
+        // Find the range of inverse depth in the local neighborhood
+        float minInvZ = min(min(min(min(invZCenter, invZLeft), invZRight), invZUp), invZDown);
+        float maxInvZ = max(max(max(max(invZCenter, invZLeft), invZRight), invZUp), invZDown);
+        float deltaInvZ = maxInvZ - minInvZ;
+
+        // Cull if gradient exceeds threshold
+        if (deltaInvZ > deltaInvZThreshold) {
             return; // Cull this vertex
         }
     }
