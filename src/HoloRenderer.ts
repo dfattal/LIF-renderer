@@ -116,6 +116,8 @@ export class HoloRenderer extends THREE.Mesh {
       pointSize: { value: 2.0 },
       meshMode: { value: 0.0 }, // 0 = billboard mode, 1 = connected mesh mode
       cullSteepFaces: { value: 1.0 }, // 1 = cull steep/back-facing surfaces, 0 = show all
+      showDepth: { value: 0.0 }, // 0 = show RGB, 1 = show depth visualization
+      showNormals: { value: 0.0 }, // 0 = show RGB, 1 = show normal Z projection visualization
     };
   }
 
@@ -278,6 +280,30 @@ export class HoloRenderer extends THREE.Mesh {
   // Get steep face culling state
   getSteepFaceCulling(): boolean {
     return this.uniforms.cullSteepFaces.value > 0.5;
+  }
+
+  // Toggle depth visualization (shows depth map instead of RGB texture)
+  toggleDepthVisualization(): boolean {
+    const newValue = this.uniforms.showDepth.value > 0.5 ? 0.0 : 1.0;
+    this.uniforms.showDepth.value = newValue;
+    return newValue > 0.5;
+  }
+
+  // Get depth visualization state
+  getDepthVisualization(): boolean {
+    return this.uniforms.showDepth.value > 0.5;
+  }
+
+  // Toggle normal visualization (shows surface normal Z projection)
+  toggleNormalVisualization(): boolean {
+    const newValue = this.uniforms.showNormals.value > 0.5 ? 0.0 : 1.0;
+    this.uniforms.showNormals.value = newValue;
+    return newValue > 0.5;
+  }
+
+  // Get normal visualization state
+  getNormalVisualization(): boolean {
+    return this.uniforms.showNormals.value > 0.5;
   }
 
   // Generate connected mesh geometry from projector data

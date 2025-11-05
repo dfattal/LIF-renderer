@@ -9,6 +9,8 @@ precision highp sampler2D;
 
 out vec4 vColor;
 out vec2 vQuadUV;
+out vec2 vTexUV;
+out float vNormalZ; // Surface normal Z component (in projector camera space)
 
 uniform sampler2D rgbTexture;
 uniform sampler2D depthTexture;
@@ -223,6 +225,15 @@ void main() {
     // Sample RGB color first
     vColor = texture(rgbTexture, texUV);
     vColor.a = 1.0; // Full opacity for now
+
+    // Pass texture UV to fragment shader for depth visualization
+    vTexUV = texUV;
+
+    // Compute surface normal for visualization
+    vec3 surfaceNormal = computeSurfaceNormal(pixelX, pixelY, depth);
+    // Clamp normal.z to [0, 1] range (0 = perpendicular, 1 = facing projector)
+    // Projector looks down -Z, so surfaces facing it have positive normal.z
+    vNormalZ = max(0.0, surfaceNormal.z);
 
     // Discard points behind the camera (with small epsilon for numerical stability)
     if (posView.z >= -0.001) {

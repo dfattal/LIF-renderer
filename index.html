@@ -36,6 +36,8 @@
       2 Fingers: Pan/Zoom<br>
       R/Long Press: Reset view<br>
       M: Toggle mesh mode<br>
+      V: Toggle depth view<br>
+      N: Toggle normal view<br>
       F: Toggle frustum
     </span>
   </div>
@@ -165,6 +167,9 @@
               'Double Click/Tap: Orbit point<br>' +
               '2 Fingers: Pan/Zoom<br>' +
               'R/Long Press: Reset view<br>' +
+              'M: Toggle mesh mode<br>' +
+              'V: Toggle depth view<br>' +
+              'N: Toggle normal view<br>' +
               'F: Toggle frustum';
           }
           break;
@@ -185,6 +190,8 @@
             '2 Fingers: Pan/Zoom<br>' +
             'R/Long Press: Reset view<br>' +
             'M: Toggle mesh mode<br>' +
+            'V: Toggle depth view<br>' +
+            'N: Toggle normal view<br>' +
             'G: Toggle gradient culling<br>' +
             'F: Toggle frustum';
           break;
@@ -203,6 +210,22 @@
           if (holoRenderer2) {
             const cullEnabled = holoRenderer2.toggleSteepFaceCulling();
             console.log('Gradient culling:', cullEnabled ? 'ON (hide steep faces)' : 'OFF (show all)');
+          }
+          break;
+        case 'KeyV':
+          // Toggle depth visualization
+          const holoRenderer3 = findHoloRenderer();
+          if (holoRenderer3) {
+            const showDepth = holoRenderer3.toggleDepthVisualization();
+            console.log('Depth visualization:', showDepth ? 'ON (show depth)' : 'OFF (show RGB)');
+          }
+          break;
+        case 'KeyN':
+          // Toggle normal visualization
+          const holoRenderer4 = findHoloRenderer();
+          if (holoRenderer4) {
+            const showNormals = holoRenderer4.toggleNormalVisualization();
+            console.log('Normal visualization:', showNormals ? 'ON (show normals)' : 'OFF (show RGB)');
           }
           break;
       }
@@ -422,6 +445,9 @@
             '2 Fingers: Pan/Zoom<br>' +
             'R/Long Press: Reset view<br>' +
             'M: Toggle mesh mode<br>' +
+            'V: Toggle depth view<br>' +
+            'N: Toggle normal view<br>' +
+            'G: Toggle gradient culling<br>' +
             'F: Toggle frustum';
         }, 800);
       } else if (touches.length === 2) {
