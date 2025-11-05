@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import { HoloRenderer } from "./HoloRenderer";
+import type { LifView } from "./types/lif";
 
 export type HoloProjectorOptions = {
   // URL to fetch RGB image from. (default: undefined)
@@ -63,6 +64,64 @@ export class HoloProjector extends THREE.Object3D {
 
   // Frustum visualization (Group containing LineSegments)
   frustumHelper: THREE.Group;
+
+  /**
+   * Create a HoloProjector from a LIF view object
+   * Automatically converts LIF rotation encoding to THREE.js quaternion
+   * @param view - LIF view object with image, depth, intrinsics, and pose
+   * @param options - Optional overrides for HoloProjector parameters
+   * @returns HoloProjector instance with pose applied
+   */
+  static async fromLifView(
+    view: LifView,
+    options?: Partial<HoloProjectorOptions>,
+  ): Promise<HoloProjector> {
+    // Import the rotation conversion function
+    const { lifRotationToQuaternion } = await import("./LifLoader");
+
+    const projectorOptions: HoloProjectorOptions = {
+      // Textures from blob URLs
+      rgbUrl: view.image.url,
+      depthUrl: view.inv_z_map.url,
+
+      // Dimensions
+      width: view.width_px,
+      height: view.height_px,
+
+      // Camera intrinsics (assuming centered principal point, square pixels)
+      intrinsics: {
+        fx: view.focal_px,
+        fy: view.focal_px, // Square pixels
+        cx: view.width_px / 2, // Centered principal point
+        cy: view.height_px / 2,
+      },
+
+      // Inverse depth range (direct mapping)
+      invDepthRange: {
+        min: view.inv_z_map.min,
+        max: view.inv_z_map.max,
+        baseline: 1.0, // Default, can be overridden
+      },
+
+      // Merge any custom options
+      ...options,
+    };
+
+    const projector = new HoloProjector(projectorOptions);
+
+    // Apply camera pose from LIF data
+    projector.position.set(
+      view.position[0],
+      view.position[1],
+      view.position[2],
+    );
+
+    // Convert LIF rotation to THREE.js quaternion
+    const quaternion = lifRotationToQuaternion(view.rotation);
+    projector.quaternion.copy(quaternion);
+
+    return projector;
+  }
 
   constructor(options: HoloProjectorOptions) {
     super();

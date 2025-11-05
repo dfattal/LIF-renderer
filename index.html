@@ -29,17 +29,48 @@
     FPS: <span id="fps">60</span><br>
     Points: <span id="point-count">0</span><br>
     Mode: <span id="mode">Free Camera</span><br>
+    <span id="camera-pos">(0.000, 0.000, 0.000)</span><br>
     <div style="margin-top: 10px;">
       Gradient Filter: <span id="gradient-enabled">ON</span><br>
-      Threshold: <span id="gradient-value">0.0090</span><br>
-      <input type="range" id="gradient-slider" min="0" max="200" value="100" step="1" style="width: 200px;">
+      <div id="gradient-threshold-container">
+        Threshold: <span id="gradient-value">0.0090</span><br>
+        <input type="range" id="gradient-slider" min="0" max="200" value="100" step="1" style="width: 200px;">
+      </div>
     </div>
     <span id="controls"></span>
   </div>
 
+  <div id="lif-loader" style="position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); padding: 15px; border-radius: 5px; color: white; font-family: monospace; z-index: 100; max-width: 300px;">
+    <div style="margin-bottom: 8px;">Load LIF File:</div>
+    <input type="file" id="lif-file-input" accept=".lif,.jpg,.jpeg,image/jpeg" style="width: 200px;">
+    <div id="lif-status" style="margin-top: 8px; font-size: 12px; color: #aaa;">LIF = JPEG with metadata</div>
+
+    <div id="view-selector" style="margin-top: 10px; display: none;">
+      <label style="font-size: 12px;">
+        View:
+        <select id="view-select" style="margin-left: 5px; background: #333; color: white; border: 1px solid #555; padding: 2px 5px;">
+          <option value="0">View 0</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="view-info" style="margin-top: 15px; font-size: 11px; line-height: 1.4; border-top: 1px solid #555; padding-top: 10px; display: none;">
+      <div style="font-weight: bold; margin-bottom: 5px;">View Info:</div>
+      <div>Pos: <span id="view-pos">-</span></div>
+      <div>Rot: <span id="view-rot">-</span></div>
+      <div style="margin-top: 5px;">fx: <span id="view-fx">-</span></div>
+      <div>fy: <span id="view-fy">-</span></div>
+      <div>cx: <span id="view-cx">-</span></div>
+      <div>cy: <span id="view-cy">-</span></div>
+      <div style="margin-top: 5px;">invZ min: <span id="view-invz-min">-</span></div>
+      <div>invZ max: <span id="view-invz-max">-</span></div>
+      <div>baseline: <span id="view-baseline">-</span>m</div>
+    </div>
+  </div>
+
   <script type="module">
     import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.173.0/build/three.module.js";
-    import { HoloProjector, HoloRenderer } from "./src/index.ts";
+    import { HoloProjector, HoloRenderer, loadLifFile } from "./src/index.ts";
 
     // Scene setup
     const scene = new THREE.Scene();
@@ -73,8 +104,8 @@
 
     document.getElementById('point-count').textContent = (width * height).toLocaleString();
 
-    // Create holographic projector
-    const projector = new HoloProjector({
+    // Create holographic projector (use let so we can replace it when loading LIF files)
+    let projector = new HoloProjector({
       rgbUrl: './assets/rgb.jpg',
       depthUrl: './assets/depth.png',
       intrinsics: {
@@ -94,6 +125,13 @@
     });
 
     scene.add(projector);
+
+    // Store initial camera position and rotation for reset
+    let initialCameraPosition = new THREE.Vector3(0, 0, 0);
+    let initialCameraQuaternion = new THREE.Quaternion(0, 0, 0, 1);
+
+    // Store all loaded projectors from LIF file
+    let loadedProjectors = [];
 
     // Add helpers
     const axesHelper = new THREE.AxesHelper(0.5);
@@ -207,9 +245,9 @@
           projector.frustumHelper.visible = !projector.frustumHelper.visible;
           break;
         case 'KeyR':
-          // Reset view to origin
-          camera.position.set(0, 0, 0);
-          camera.quaternion.set(0, 0, 0, 1);
+          // Reset view to initial position
+          camera.position.copy(initialCameraPosition);
+          camera.quaternion.copy(initialCameraQuaternion);
           isOrbitMode = false;
           isAnimating = false;
           document.getElementById('mode').textContent = 'Free Camera';
@@ -236,11 +274,13 @@
               // Turn off
               holoRenderer2.setGradientThreshold(0.0);
               document.getElementById('gradient-enabled').textContent = 'OFF';
+              document.getElementById('gradient-threshold-container').style.display = 'none';
               console.log('Gradient filter: OFF');
             } else {
               // Turn on with default threshold
               holoRenderer2.setGradientThreshold(defaultThreshold);
               document.getElementById('gradient-enabled').textContent = 'ON';
+              document.getElementById('gradient-threshold-container').style.display = 'block';
               document.getElementById('gradient-value').textContent = defaultThreshold.toFixed(4);
               document.getElementById('gradient-slider').value = '100';
               console.log('Gradient filter: ON');
@@ -295,11 +335,13 @@
         holoRenderer.setGradientThreshold(threshold);
         gradientValue.textContent = threshold.toFixed(4);
 
-        // Update enabled status
+        // Update enabled status and visibility
         if (threshold > 0.0) {
           gradientEnabled.textContent = 'ON';
+          document.getElementById('gradient-threshold-container').style.display = 'block';
         } else {
           gradientEnabled.textContent = 'OFF';
+          document.getElementById('gradient-threshold-container').style.display = 'none';
         }
       }
     });
@@ -707,6 +749,163 @@
       }
     }, { passive: false });
 
+    // LIF file loading handler
+    document.getElementById('lif-file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const statusEl = document.getElementById('lif-status');
+      statusEl.textContent = 'Loading...';
+      statusEl.style.color = '#ffaa00';
+
+      try {
+        // Load LIF file and create projectors
+        const projectors = await loadLifFile(file);
+
+        if (projectors.length === 0) {
+          throw new Error('No views found in LIF file');
+        }
+
+        // Store all loaded projectors
+        loadedProjectors = projectors;
+
+        // Remove old projector from scene
+        scene.remove(projector);
+
+        // Use first view (views[0])
+        const newProjector = projectors[0];
+        scene.add(newProjector);
+
+        // Update global projector reference
+        window.projector = newProjector;
+        projector = newProjector; // Update local reference too
+
+        // Add axes helper to new projector
+        const newAxesHelper = new THREE.AxesHelper(0.5);
+        newProjector.add(newAxesHelper);
+
+        // Populate view selector dropdown if multiple views
+        const viewSelect = document.getElementById('view-select');
+        const viewSelector = document.getElementById('view-selector');
+        viewSelect.innerHTML = '';
+
+        for (let i = 0; i < projectors.length; i++) {
+          const option = document.createElement('option');
+          option.value = i;
+          option.textContent = `View ${i}`;
+          viewSelect.appendChild(option);
+        }
+
+        // Show view selector if multiple views
+        if (projectors.length > 1) {
+          viewSelector.style.display = 'block';
+        } else {
+          viewSelector.style.display = 'none';
+        }
+
+        // Update point count display
+        const pointCount = newProjector.width * newProjector.height;
+        document.getElementById('point-count').textContent = pointCount.toLocaleString();
+
+        // Position camera at the projector's location (view pose)
+        camera.position.copy(newProjector.position);
+        camera.quaternion.copy(newProjector.quaternion);
+
+        // Store as new initial position for reset
+        initialCameraPosition.copy(newProjector.position);
+        initialCameraQuaternion.copy(newProjector.quaternion);
+
+        isOrbitMode = false;
+        isAnimating = false;
+        document.getElementById('mode').textContent = 'Free Camera';
+        updateControls('free');
+
+        console.log('Camera positioned at view location:', camera.position, camera.quaternion);
+        console.log('Stored as initial position for reset (R key)');
+
+        statusEl.textContent = `Loaded: ${newProjector.width}x${newProjector.height} (${projectors.length} view${projectors.length > 1 ? 's' : ''})`;
+        statusEl.style.color = '#00ff00';
+
+        // Helper function to update view info display
+        function updateViewInfo(proj) {
+          document.getElementById('view-info').style.display = 'block';
+          document.getElementById('view-pos').textContent =
+            `(${proj.position.x.toFixed(4)}, ${proj.position.y.toFixed(4)}, ${proj.position.z.toFixed(4)})`;
+
+          // Format quaternion
+          const quat = proj.quaternion;
+          document.getElementById('view-rot').textContent =
+            `(${quat.x.toFixed(3)}, ${quat.y.toFixed(3)}, ${quat.z.toFixed(3)}, ${quat.w.toFixed(3)})`;
+
+          document.getElementById('view-fx').textContent = proj.intrinsics.fx.toFixed(2);
+          document.getElementById('view-fy').textContent = proj.intrinsics.fy.toFixed(2);
+          document.getElementById('view-cx').textContent = proj.intrinsics.cx.toFixed(2);
+          document.getElementById('view-cy').textContent = proj.intrinsics.cy.toFixed(2);
+          document.getElementById('view-invz-min').textContent = proj.invDepthRange.min.toFixed(6);
+          document.getElementById('view-invz-max').textContent = proj.invDepthRange.max.toFixed(6);
+          document.getElementById('view-baseline').textContent = (proj.invDepthRange.baseline || 1.0).toFixed(4);
+        }
+
+        // Update view info for first view
+        updateViewInfo(newProjector);
+
+        console.log('LIF file loaded successfully');
+        console.log('  Views:', projectors.length);
+        console.log('  Dimensions:', newProjector.width, 'x', newProjector.height);
+        console.log('  Position:', newProjector.position);
+        console.log('  Rotation (quaternion):', newProjector.quaternion);
+
+      } catch (error) {
+        console.error('Failed to load LIF file:', error);
+        statusEl.textContent = 'Error: ' + error.message;
+        statusEl.style.color = '#ff0000';
+      }
+    });
+
+    // View selector change handler
+    document.getElementById('view-select').addEventListener('change', (e) => {
+      const viewIndex = parseInt(e.target.value);
+
+      if (viewIndex >= 0 && viewIndex < loadedProjectors.length) {
+        // Remove current projector from scene
+        scene.remove(projector);
+
+        // Add selected view projector
+        const selectedProjector = loadedProjectors[viewIndex];
+        scene.add(selectedProjector);
+
+        // Update global reference
+        window.projector = selectedProjector;
+        projector = selectedProjector;
+
+        // Update initial position for reset (but don't move camera yet)
+        initialCameraPosition.copy(selectedProjector.position);
+        initialCameraQuaternion.copy(selectedProjector.quaternion);
+
+        // Update view info display
+        document.getElementById('view-pos').textContent =
+          `(${selectedProjector.position.x.toFixed(4)}, ${selectedProjector.position.y.toFixed(4)}, ${selectedProjector.position.z.toFixed(4)})`;
+
+        const quat = selectedProjector.quaternion;
+        document.getElementById('view-rot').textContent =
+          `(${quat.x.toFixed(3)}, ${quat.y.toFixed(3)}, ${quat.z.toFixed(3)}, ${quat.w.toFixed(3)})`;
+
+        document.getElementById('view-fx').textContent = selectedProjector.intrinsics.fx.toFixed(2);
+        document.getElementById('view-fy').textContent = selectedProjector.intrinsics.fy.toFixed(2);
+        document.getElementById('view-cx').textContent = selectedProjector.intrinsics.cx.toFixed(2);
+        document.getElementById('view-cy').textContent = selectedProjector.intrinsics.cy.toFixed(2);
+        document.getElementById('view-invz-min').textContent = selectedProjector.invDepthRange.min.toFixed(6);
+        document.getElementById('view-invz-max').textContent = selectedProjector.invDepthRange.max.toFixed(6);
+        document.getElementById('view-baseline').textContent = (selectedProjector.invDepthRange.baseline || 1.0).toFixed(4);
+
+        // Update point count
+        const pointCount = selectedProjector.width * selectedProjector.height;
+        document.getElementById('point-count').textContent = pointCount.toLocaleString();
+
+        console.log(`Switched to view ${viewIndex}`);
+      }
+    });
+
     // Animation loop
     let lastTime = 0;
     let frameCount = 0;
@@ -719,12 +918,17 @@
       frameCount++;
       fpsFrameCount++;
 
-      // Update FPS counter
+      // Update FPS counter and camera position
       if (time - fpsUpdateTime >= 500) {
         const fps = Math.round((fpsFrameCount * 1000) / (time - fpsUpdateTime));
         document.getElementById('fps').textContent = fps;
         fpsFrameCount = 0;
         fpsUpdateTime = time;
+
+        // Update camera position display
+        const pos = camera.position;
+        document.getElementById('camera-pos').textContent =
+          `(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`;
       }
 
       // Camera animation
