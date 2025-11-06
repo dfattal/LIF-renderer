@@ -33,8 +33,9 @@ export interface LifView {
   rotation: [number, number, number]; // [sl.x, sl.y, roll] where forward = normalize(vec3(sl.x, sl.y, 1))
 
   // Optional: frustum skew (for non-centered principal points)
-  // Principal point: cx = width/2 - frustum_skew[0] * focal_px, cy = height/2 - frustum_skew[1] * focal_px
-  frustum_skew?: [number, number];
+  // Principal point: cx = width/2 - frustum_skew.x * focal_px, cy = height/2 - frustum_skew.y * focal_px
+  // Can be either array [x, y] (legacy) or object {x, y} (current)
+  frustum_skew?: [number, number] | { x: number; y: number };
 
   // Layered depth image support (ignore for basic usage)
   layers_top_to_bottom?: LifLayer[];
@@ -85,6 +86,11 @@ export interface LifLayer {
 
 export interface LifStereoRenderData {
   inv_convergence_distance?: number;
+  invd?: number; // Alias for inv_convergence_distance
+  frustum_skew?: {
+    x: number;
+    y: number;
+  };
   [key: string]: unknown; // Allow additional properties
 }
 

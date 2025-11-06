@@ -171,6 +171,7 @@
 
     // Raycast hit marker (red sphere)
     let hitMarker = null;
+    let hitMarkerVisible = true; // Default to visible
     function createHitMarker(position) {
       // Remove old marker if exists
       if (hitMarker) {
@@ -182,7 +183,16 @@
       const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
       hitMarker = new THREE.Mesh(markerGeometry, markerMaterial);
       hitMarker.position.copy(position);
+      hitMarker.visible = hitMarkerVisible;
       scene.add(hitMarker);
+    }
+
+    function toggleHitMarker() {
+      if (hitMarker) {
+        hitMarkerVisible = !hitMarkerVisible;
+        hitMarker.visible = hitMarkerVisible;
+        console.log('Orbit marker:', hitMarkerVisible ? 'visible' : 'hidden');
+      }
     }
 
     // Camera animation state
@@ -231,10 +241,12 @@
             'Long Press: Reset view';
         } else {
           const viewNavigation = loadedProjectors.length > 1 ? '←→: Switch views<br>' : '';
+          const markerStatus = hitMarker ? (hitMarkerVisible ? 'ON' : 'OFF') : 'N/A';
           controlsElement.innerHTML =
             'Click+Drag: Rotate orbit<br>' +
             'Wheel: Zoom<br>' +
             viewNavigation +
+            'O: Toggle orbit marker (' + markerStatus + ')<br>' +
             'R: Reset view<br>' +
             'Escape: Exit orbit mode';
         }
@@ -313,6 +325,13 @@
           if (holoRenderer3) {
             const showDepth = holoRenderer3.toggleDepthVisualization();
             console.log('Depth visualization:', showDepth ? 'ON (show depth)' : 'OFF (show RGB)');
+          }
+          break;
+        case 'KeyO':
+          // Toggle orbit marker visibility
+          toggleHitMarker();
+          if (isOrbitMode) {
+            updateControls('orbit'); // Update controls display to show new status
           }
           break;
         case 'ArrowLeft':
@@ -883,20 +902,20 @@
 
       try {
         // Load LIF file and create projectors
-        const projectors = await loadLifFile(file);
+        const result = await loadLifFile(file);
 
-        if (projectors.length === 0) {
+        if (result.projectors.length === 0) {
           throw new Error('No views found in LIF file');
         }
 
         // Store all loaded projectors
-        loadedProjectors = projectors;
+        loadedProjectors = result.projectors;
 
         // Remove old projector from scene
         scene.remove(projector);
 
         // Use first view (views[0])
-        const newProjector = projectors[0];
+        const newProjector = result.projectors[0];
         scene.add(newProjector);
 
         // Update global projector reference
@@ -912,7 +931,7 @@
         const viewSelector = document.getElementById('view-selector');
         viewSelect.innerHTML = '';
 
-        for (let i = 0; i < projectors.length; i++) {
+        for (let i = 0; i < result.projectors.length; i++) {
           const option = document.createElement('option');
           option.value = i;
           option.textContent = `View ${i}`;
@@ -920,7 +939,7 @@
         }
 
         // Show view selector if multiple views
-        if (projectors.length > 1) {
+        if (result.projectors.length > 1) {
           viewSelector.style.display = 'block';
         } else {
           viewSelector.style.display = 'none';
@@ -938,15 +957,53 @@
         initialCameraPosition.copy(newProjector.position);
         initialCameraQuaternion.copy(newProjector.quaternion);
 
-        isOrbitMode = false;
-        isAnimating = false;
-        document.getElementById('mode').textContent = 'Free Camera';
-        updateControls('free');
+        // Check if we should start in orbit mode
+        if (result.orbitCenter) {
+          // Create red marker at orbit center
+          createHitMarker(result.orbitCenter);
+
+          // Set up orbit mode
+          orbitCenter.copy(result.orbitCenter);
+          orbitDistance = camera.position.distanceTo(orbitCenter);
+
+          const offset = new THREE.Vector3().subVectors(camera.position, orbitCenter);
+          orbitTheta = Math.atan2(offset.x, offset.z);
+          orbitPhi = Math.acos(offset.y / orbitDistance);
+
+          const x = orbitDistance * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+          const y = orbitDistance * Math.cos(orbitPhi);
+          const z = orbitDistance * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+
+          animationStartPos.copy(camera.position);
+          animationStartQuat.copy(camera.quaternion);
+          animationTargetPos.copy(orbitCenter).add(new THREE.Vector3(x, y, z));
+
+          const tempCamera = new THREE.PerspectiveCamera();
+          tempCamera.position.copy(animationTargetPos);
+          tempCamera.lookAt(orbitCenter);
+          animationTargetQuat.copy(tempCamera.quaternion);
+
+          isAnimating = true;
+          animationProgress = 0;
+          isOrbitMode = true;
+
+          document.getElementById('mode').textContent = 'Orbit Mode (auto)';
+          updateControls('orbit');
+
+          console.log('Auto-orbit mode enabled with convergence point:', orbitCenter);
+        } else {
+          isOrbitMode = false;
+          isAnimating = false;
+          document.getElementById('mode').textContent = 'Free Camera';
+          updateControls('free');
+
+          console.log('No orbit center from stereo_render_data, starting in free camera mode');
+        }
 
         console.log('Camera positioned at view location:', camera.position, camera.quaternion);
         console.log('Stored as initial position for reset (R key)');
 
-        statusEl.textContent = `Loaded: ${newProjector.width}x${newProjector.height} (${projectors.length} view${projectors.length > 1 ? 's' : ''})`;
+        statusEl.textContent = `Loaded: ${newProjector.width}x${newProjector.height} (${result.projectors.length} view${result.projectors.length > 1 ? 's' : ''})`;
         statusEl.style.color = '#00ff00';
 
         // Helper function to update view info display
@@ -973,7 +1030,7 @@
         updateViewInfo(newProjector);
 
         console.log('LIF file loaded successfully');
-        console.log('  Views:', projectors.length);
+        console.log('  Views:', result.projectors.length);
         console.log('  Dimensions:', newProjector.width, 'x', newProjector.height);
         console.log('  Position:', newProjector.position);
         console.log('  Rotation (quaternion):', newProjector.quaternion);

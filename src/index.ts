@@ -13,4 +13,5 @@ export {
   lifRotationToQuaternion,
   createHoloProjectorFromLifView,
 } from "./LifLoader";
+export type { LoadLifFileResult } from "./LifLoader";
 export type { LifView, LifData, LifStereoRenderData } from "./types/lif";

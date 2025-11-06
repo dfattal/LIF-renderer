@@ -109,13 +109,17 @@ export async function createHoloProjectorFromLifView(
   // Formula: cx = width/2 - skew.x * fx, cy = height/2 - skew.y * fy
   let cx: number, cy: number;
 
-  if (view.frustum_skew && Array.isArray(view.frustum_skew)) {
-    cx = view.width_px / 2 - view.frustum_skew[0] * view.focal_px;
-    cy = view.height_px / 2 - view.frustum_skew[1] * view.focal_px;
+  if (view.frustum_skew) {
+    // Handle frustum_skew as either array [x, y] or object {x, y}
+    const skewX = Array.isArray(view.frustum_skew) ? view.frustum_skew[0] : view.frustum_skew.x;
+    const skewY = Array.isArray(view.frustum_skew) ? view.frustum_skew[1] : view.frustum_skew.y;
+
+    cx = view.width_px / 2 - skewX * view.focal_px;
+    cy = view.height_px / 2 - skewY * view.focal_px;
     console.log('Computed principal point from frustum_skew:', {
-      skew: view.frustum_skew,
+      skew: { x: skewX, y: skewY },
       centered: [view.width_px / 2, view.height_px / 2],
-      offset: [view.frustum_skew[0] * view.focal_px, view.frustum_skew[1] * view.focal_px],
+      offset: [skewX * view.focal_px, skewY * view.focal_px],
       final: [cx, cy]
     });
   } else {
@@ -526,11 +530,20 @@ export class LifLoader {
 }
 
 /**
+ * Result of loading a LIF file with projectors and optional orbit center
+ */
+export interface LoadLifFileResult {
+  projectors: HoloProjector[];
+  orbitCenter?: THREE.Vector3;
+  stereo_render_data?: unknown;
+}
+
+/**
  * Convenience function to load a LIF file and create HoloProjector instances
  * @param file - The LIF file to load
- * @returns Array of HoloProjector instances (one per view)
+ * @returns Object with projectors array and optional orbit center
  */
-export async function loadLifFile(file: File): Promise<HoloProjector[]> {
+export async function loadLifFile(file: File): Promise<LoadLifFileResult> {
   const loader = new LifLoader();
   const data = await loader.load(file);
 
@@ -555,5 +568,91 @@ export async function loadLifFile(file: File): Promise<HoloProjector[]> {
     ),
   );
 
-  return projectors;
+  // Calculate orbit center from stereo_render_data if available
+  let orbitCenter: THREE.Vector3 | undefined = undefined;
+
+  if (data.stereo_render_data && projectors.length > 0) {
+    const stereoData = data.stereo_render_data as any;
+    const invd = stereoData.invd ?? stereoData.inv_convergence_distance;
+
+    console.log('Stereo render data:', stereoData);
+
+    if (invd && invd !== 0) {
+      const firstProjector = projectors[0];
+      const firstView = data.views[0];
+
+      // Get frustum skew from stereo_render_data or fall back to view's frustum_skew
+      let sk = stereoData.frustum_skew;
+
+      if (!sk && firstView.frustum_skew) {
+        // Handle frustum_skew as either array [x, y] or object {x, y}
+        if (Array.isArray(firstView.frustum_skew)) {
+          sk = {
+            x: firstView.frustum_skew[0],
+            y: firstView.frustum_skew[1]
+          };
+        } else {
+          sk = firstView.frustum_skew;
+        }
+        console.log('Using frustum_skew from view:', sk);
+      } else if (!sk) {
+        // Default to center (no skew)
+        sk = { x: 0, y: 0 };
+        console.log('No frustum_skew found, using center point (0, 0)');
+      }
+
+      // Calculate convergence depth in projector space
+      // invd is in units of 1/meters, baseline is in meters
+      // depth = baseline / invd (in meters)
+      const convergenceDepth = baselineMeters / invd;
+
+      // Get camera intrinsics
+      const fx = firstProjector.intrinsics.fx;
+      const fy = firstProjector.intrinsics.fy;
+      const cx = firstProjector.intrinsics.cx;
+      const cy = firstProjector.intrinsics.cy;
+
+      // Calculate the ray through projector center and (sk.x, sk.y, 1)
+      // In projector space, the point at depth z on a ray through pixel (px, py) is:
+      // X = (px - cx) * z / fx
+      // Y = (py - cy) * z / fy
+      // Z = -z (camera looks down -Z)
+
+      // The skew is in normalized coordinates, so convert to pixel coordinates
+      // sk represents the offset from center in focal length units
+      // So the pixel coordinate is: center + sk * focal_length
+      const px = cx + sk.x * fx;
+      const py = cy + sk.y * fy;
+
+      // Calculate 3D point in projector space
+      const X = (px - cx) * convergenceDepth / fx;
+      const Y = (py - cy) * convergenceDepth / fy;
+      const Z = -convergenceDepth; // Camera looks down -Z
+
+      // Create point in projector local space
+      const localPoint = new THREE.Vector3(X, Y, Z);
+
+      // Transform to world space
+      firstProjector.updateMatrixWorld();
+      orbitCenter = localPoint.applyMatrix4(firstProjector.matrixWorld);
+
+      console.log('Calculated orbit center from stereo_render_data:');
+      console.log('  invd:', invd);
+      console.log('  frustum_skew:', sk);
+      console.log('  baseline_mm:', baselineMeters * 1000);
+      console.log('  convergenceDepth:', convergenceDepth);
+      console.log('  pixel coords:', { px, py });
+      console.log('  projector space:', { X, Y, Z });
+      console.log('  world space:', orbitCenter);
+    } else {
+      console.log('No valid stereo_render_data for orbit center calculation');
+      console.log('  invd:', invd);
+    }
+  }
+
+  return {
+    projectors,
+    orbitCenter,
+    stereo_render_data: data.stereo_render_data,
+  };
 }
