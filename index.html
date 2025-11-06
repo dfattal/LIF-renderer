@@ -129,9 +129,13 @@
     // Store initial camera position and rotation for reset
     let initialCameraPosition = new THREE.Vector3(0, 0, 0);
     let initialCameraQuaternion = new THREE.Quaternion(0, 0, 0, 1);
+    let initialOrbitCenter = null; // Store orbit center if view has valid invd
+    let initialHasOrbitMode = false; // Track if this view should start in orbit mode
 
     // Store all loaded projectors from LIF file
     let loadedProjectors = [];
+    // Store orbit center for each view (indexed by view index)
+    let viewOrbitCenters = [];
 
     // Add helpers
     const axesHelper = new THREE.AxesHelper(0.5);
@@ -159,7 +163,7 @@
     };
 
     const mouseSensitivity = 0.002;
-    const moveSpeed = 2.0;
+    const moveSpeed = 1.0; // Reduced from 2.0 (2x less sensitive)
     const euler = new THREE.Euler(0, 0, 0, 'YXZ');
 
     // Orbit mode state
@@ -277,13 +281,41 @@
           projector.frustumHelper.visible = !projector.frustumHelper.visible;
           break;
         case 'KeyR':
-          // Reset view to initial position
+          // Reset view to initial state (orbit mode if view has invd, otherwise free camera)
           camera.position.copy(initialCameraPosition);
           camera.quaternion.copy(initialCameraQuaternion);
-          isOrbitMode = false;
-          isAnimating = false;
-          document.getElementById('mode').textContent = 'Free Camera';
-          updateControls('free');
+
+          if (initialHasOrbitMode && initialOrbitCenter) {
+            // Reset to orbit mode with the initial orbit center
+            orbitCenter.copy(initialOrbitCenter);
+            orbitDistance = camera.position.distanceTo(orbitCenter);
+
+            const offset = new THREE.Vector3().subVectors(camera.position, orbitCenter);
+            orbitTheta = Math.atan2(offset.x, offset.z);
+            orbitPhi = Math.acos(offset.y / orbitDistance);
+
+            isOrbitMode = true;
+            isAnimating = false;
+            document.getElementById('mode').textContent = 'Orbit Mode';
+            updateControls('orbit');
+
+            // Ensure orbit marker exists and is visible
+            if (!hitMarker) {
+              createHitMarker(initialOrbitCenter);
+            } else {
+              hitMarker.position.copy(initialOrbitCenter);
+              hitMarker.visible = hitMarkerVisible;
+            }
+
+            console.log('Reset to orbit mode at initial orbit center');
+          } else {
+            // Reset to free camera mode
+            isOrbitMode = false;
+            isAnimating = false;
+            document.getElementById('mode').textContent = 'Free Camera';
+            updateControls('free');
+            console.log('Reset to free camera mode');
+          }
           break;
         case 'KeyM':
           // Cycle mesh mode
@@ -911,6 +943,50 @@
         // Store all loaded projectors
         loadedProjectors = result.projectors;
 
+        // Calculate orbit centers for all views if stereo_render_data exists
+        viewOrbitCenters = new Array(result.projectors.length).fill(null);
+
+        if (result.stereo_render_data) {
+          const stereoData = result.stereo_render_data;
+          const invd = stereoData.invd ?? stereoData.inv_convergence_distance;
+
+          if (invd && invd !== 0) {
+            // Calculate orbit center for each view
+            result.projectors.forEach((proj, index) => {
+              // Get frustum skew from the view (via the original views data if available)
+              // For simplicity, we'll calculate it directly here
+              const baselineMeters = proj.invDepthRange.baseline || 1.0;
+              const convergenceDepth = baselineMeters / invd;
+
+              const fx = proj.intrinsics.fx;
+              const fy = proj.intrinsics.fy;
+              const cx = proj.intrinsics.cx;
+              const cy = proj.intrinsics.cy;
+
+              // Assume centered frustum (sk.x = 0, sk.y = 0) for now
+              // The point is at (cx, cy) which is the center
+              const px = cx;
+              const py = cy;
+
+              // Calculate 3D point in projector space (at the center ray)
+              const X = (px - cx) * convergenceDepth / fx; // = 0
+              const Y = (py - cy) * convergenceDepth / fy; // = 0
+              const Z = -convergenceDepth;
+
+              // Create point in projector local space
+              const localPoint = new THREE.Vector3(X, Y, Z);
+
+              // Transform to world space
+              proj.updateMatrixWorld();
+              const worldPoint = localPoint.applyMatrix4(proj.matrixWorld);
+
+              viewOrbitCenters[index] = worldPoint;
+
+              console.log(`View ${index} orbit center:`, worldPoint);
+            });
+          }
+        }
+
         // Remove old projector from scene
         scene.remove(projector);
 
@@ -959,6 +1035,10 @@
 
         // Check if we should start in orbit mode
         if (result.orbitCenter) {
+          // Store initial orbit state
+          initialOrbitCenter = result.orbitCenter.clone();
+          initialHasOrbitMode = true;
+
           // Create red marker at orbit center
           createHitMarker(result.orbitCenter);
 
@@ -992,6 +1072,10 @@
 
           console.log('Auto-orbit mode enabled with convergence point:', orbitCenter);
         } else {
+          // No orbit center, clear orbit state
+          initialOrbitCenter = null;
+          initialHasOrbitMode = false;
+
           isOrbitMode = false;
           isAnimating = false;
           document.getElementById('mode').textContent = 'Free Camera';
@@ -1043,15 +1127,17 @@
     });
 
     // View selector change handler
-    document.getElementById('view-select').addEventListener('change', (e) => {
+    document.getElementById('view-select').addEventListener('change', async (e) => {
       const viewIndex = parseInt(e.target.value);
 
       if (viewIndex >= 0 && viewIndex < loadedProjectors.length) {
-        // Remove current projector from scene
-        scene.remove(projector);
-
-        // Add selected view projector
         const selectedProjector = loadedProjectors[viewIndex];
+
+        // Wait for the projector to be fully initialized (textures loaded)
+        await selectedProjector.initialized;
+
+        // Now swap the projectors - textures are ready
+        scene.remove(projector);
         scene.add(selectedProjector);
 
         // Update global reference
@@ -1061,6 +1147,15 @@
         // Update initial position for reset (but don't move camera yet)
         initialCameraPosition.copy(selectedProjector.position);
         initialCameraQuaternion.copy(selectedProjector.quaternion);
+
+        // Update initial orbit state for this view
+        if (viewOrbitCenters[viewIndex]) {
+          initialOrbitCenter = viewOrbitCenters[viewIndex].clone();
+          initialHasOrbitMode = true;
+        } else {
+          initialOrbitCenter = null;
+          initialHasOrbitMode = false;
+        }
 
         // Update view info display
         document.getElementById('view-pos').textContent =

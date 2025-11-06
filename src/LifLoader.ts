@@ -568,6 +568,10 @@ export async function loadLifFile(file: File): Promise<LoadLifFileResult> {
     ),
   );
 
+  // Wait for all projectors to finish loading their textures
+  await Promise.all(projectors.map(p => p.initialized));
+  console.log('All projector textures loaded');
+
   // Calculate orbit center from stereo_render_data if available
   let orbitCenter: THREE.Vector3 | undefined = undefined;
 
