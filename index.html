@@ -21,7 +21,7 @@
       z-index: 100;
     }
   </style>
-  <script type="module" crossorigin src="/LIF-renderer/assets/main-ubDqrkpE.js"></script>
+  <script type="module" crossorigin src="/LIF-renderer/assets/main-CenC-zHr.js"></script>
 </head>
 
 <body>
@@ -30,12 +30,43 @@
     FPS: <span id="fps">60</span><br>
     Points: <span id="point-count">0</span><br>
     Mode: <span id="mode">Free Camera</span><br>
+    <span id="camera-pos">(0.000, 0.000, 0.000)</span><br>
     <div style="margin-top: 10px;">
       Gradient Filter: <span id="gradient-enabled">ON</span><br>
-      Threshold: <span id="gradient-value">0.0090</span><br>
-      <input type="range" id="gradient-slider" min="0" max="200" value="100" step="1" style="width: 200px;">
+      <div id="gradient-threshold-container">
+        Threshold: <span id="gradient-value">0.0090</span><br>
+        <input type="range" id="gradient-slider" min="0" max="200" value="100" step="1" style="width: 200px;">
+      </div>
     </div>
     <span id="controls"></span>
+  </div>
+
+  <div id="lif-loader" style="position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); padding: 15px; border-radius: 5px; color: white; font-family: monospace; z-index: 100; max-width: 300px;">
+    <div style="margin-bottom: 8px;">Load LIF File:</div>
+    <input type="file" id="lif-file-input" accept=".lif,.jpg,.jpeg,image/jpeg" style="width: 200px;">
+    <div id="lif-status" style="margin-top: 8px; font-size: 12px; color: #aaa;">LIF = JPEG with metadata</div>
+
+    <div id="view-selector" style="margin-top: 10px; display: none;">
+      <label style="font-size: 12px;">
+        View:
+        <select id="view-select" style="margin-left: 5px; background: #333; color: white; border: 1px solid #555; padding: 2px 5px;">
+          <option value="0">View 0</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="view-info" style="margin-top: 15px; font-size: 11px; line-height: 1.4; border-top: 1px solid #555; padding-top: 10px; display: none;">
+      <div style="font-weight: bold; margin-bottom: 5px;">View Info:</div>
+      <div>Pos: <span id="view-pos">-</span></div>
+      <div>Rot: <span id="view-rot">-</span></div>
+      <div style="margin-top: 5px;">fx: <span id="view-fx">-</span></div>
+      <div>fy: <span id="view-fy">-</span></div>
+      <div>cx: <span id="view-cx">-</span></div>
+      <div>cy: <span id="view-cy">-</span></div>
+      <div style="margin-top: 5px;">invZ min: <span id="view-invz-min">-</span></div>
+      <div>invZ max: <span id="view-invz-max">-</span></div>
+      <div>baseline: <span id="view-baseline">-</span>m</div>
+    </div>
   </div>
 
 </body>
