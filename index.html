@@ -169,6 +169,22 @@
     let orbitPhi = 0;
     let orbitTheta = 0;
 
+    // Raycast hit marker (red sphere)
+    let hitMarker = null;
+    function createHitMarker(position) {
+      // Remove old marker if exists
+      if (hitMarker) {
+        scene.remove(hitMarker);
+      }
+
+      // Create red sphere at hit point
+      const markerGeometry = new THREE.SphereGeometry(0.02, 16, 16);
+      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+      hitMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+      hitMarker.position.copy(position);
+      scene.add(hitMarker);
+    }
+
     // Camera animation state
     let isAnimating = false;
     let animationProgress = 0;
@@ -346,7 +362,7 @@
       }
     });
 
-    // Raycast for double-click orbit
+    // Raycast for double-click orbit using ray marching in projector space
     function raycastPointCloud(mouseX, mouseY) {
       const raycaster = new THREE.Raycaster();
       raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
@@ -354,50 +370,123 @@
 
       // Get projector transform
       projector.updateMatrixWorld();
-      const projectorMatrix = projector.matrixWorld.clone();
+      const projectorMatrixInv = projector.matrixWorld.clone().invert();
 
-      // Sample points from the depth map (sample every 4th pixel for performance)
-      const sampleStep = 4;
-      let closestPoint = null;
-      let closestDistance = Infinity;
+      // Get depth texture data
+      const depthTexture = projector.depthTexture;
+      if (!depthTexture || !depthTexture.image) {
+        console.warn('Depth texture not loaded');
+        return null;
+      }
 
-      for (let y = 0; y < height; y += sampleStep) {
-        for (let x = 0; x < width; x += sampleStep) {
-          // Reconstruct position using same logic as shader
-          const pixelX = x;
-          const pixelY = y;
+      // Create temporary canvas to read depth texture
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(depthTexture.image, 0, 0);
+      const imageData = ctx.getImageData(0, 0, width, height);
 
-          // Test multiple depths to find the closest intersection
-          const depthSamples = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0];
+      const invZMin = projector.invDepthRange.min;
+      const invZMax = projector.invDepthRange.max;
+      const baseline = projector.invDepthRange.baseline || 1.0;
+      const fx = projector.intrinsics.fx;
+      const fy = projector.intrinsics.fy;
+      const cx = projector.intrinsics.cx;
+      const cy = projector.intrinsics.cy;
 
-          for (const testDepth of depthSamples) {
-            // Reconstruct position in projector camera space
-            const fx = projector.intrinsics.fx;
-            const fy = projector.intrinsics.fy;
-            const cx = projector.intrinsics.cx;
-            const cy = projector.intrinsics.cy;
+      // Helper function to sample depth map at pixel coordinates
+      // Note: Y-flip handling - THREE.js textures have flipY=true by default
+      function sampleDepthMap(px, py) {
+        if (px < 0 || px >= width || py < 0 || py >= height) return null;
+        // Flip Y coordinate to match texture coordinate system
+        const pyFlipped = (height - 1) - Math.floor(py);
+        const idx = (pyFlipped * width + Math.floor(px)) * 4;
+        const depthValue = imageData.data[idx] / 255.0;
+        const invZ = invZMax + depthValue * (invZMin - invZMax);
+        if (Math.abs(invZ) < 1e-8) return null;
+        return baseline / invZ;
+      }
 
-            const posCamera = new THREE.Vector3(
-              (pixelX + 0.5 - cx) * testDepth / fx,
-              (pixelY + 0.5 - cy) * testDepth / fy,
-              -testDepth
-            );
+      // Transform ray to projector space
+      const rayOriginWorld = ray.origin.clone();
+      const rayDirWorld = ray.direction.clone();
+      const rayOriginProj = rayOriginWorld.applyMatrix4(projectorMatrixInv);
+      const rayDirProj = rayDirWorld.transformDirection(projectorMatrixInv);
 
-            // Transform to world space
-            const posWorld = posCamera.applyMatrix4(projectorMatrix);
+      // Ray marching in inverse depth space
+      // Start at far plane (invZMax) and march toward near plane (invZMin)
+      let currentInvZ = invZMax;
+      let stepSize = (invZMin - invZMax) / 100.0; // Initial step: 100 steps across range
+      const minStepSize = (invZMin - invZMax) / 10000.0; // Precision limit
+      let iterations = 0;
+      const maxIterations = 200;
 
-            // Check distance to ray
-            const distance = ray.distanceToPoint(posWorld);
+      while (iterations < maxIterations && Math.abs(stepSize) > Math.abs(minStepSize)) {
+        iterations++;
 
-            if (distance < closestDistance && distance < 0.5) { // Within 0.5 units of ray
-              closestDistance = distance;
-              closestPoint = posWorld.clone();
-            }
-          }
+        // Current depth along the ray
+        const currentDepth = baseline / currentInvZ;
+
+        // Ray position at this depth: rayOrigin + t * rayDir where z = -currentDepth
+        // Solve: rayOrigin.z + t * rayDir.z = -currentDepth
+        const t = (-currentDepth - rayOriginProj.z) / rayDirProj.z;
+        const rayPos = rayOriginProj.clone().addScaledVector(rayDirProj, t);
+
+        // Convert to pixel coordinates
+        const px = (rayPos.x * fx / currentDepth) + cx - 0.5;
+        const py = (rayPos.y * fy / currentDepth) + cy - 0.5;
+
+        // Check if within image bounds
+        if (px < 0 || px >= width || py < 0 || py >= height) {
+          // Ray is outside image, advance
+          currentInvZ += stepSize;
+          if (currentInvZ > invZMin) break; // Past near plane
+          continue;
+        }
+
+        // Sample depth map at this pixel
+        const surfaceDepth = sampleDepthMap(px, py);
+        if (surfaceDepth === null) {
+          // No valid depth, advance
+          currentInvZ += stepSize;
+          if (currentInvZ > invZMin) break;
+          continue;
+        }
+
+        // Compare ray depth with surface depth
+        if (currentDepth > surfaceDepth) {
+          // Ray is behind surface, keep marching forward (increasing invZ)
+          currentInvZ += stepSize;
+          if (currentInvZ > invZMin) break; // Past near plane
+        } else {
+          // Ray is in front of surface, we overshot - backtrack and refine
+          currentInvZ -= stepSize;
+          stepSize /= 2.0; // Halve step size
+          currentInvZ += stepSize; // Advance with smaller step
         }
       }
 
-      return closestPoint;
+      // Final position found
+      if (iterations >= maxIterations || Math.abs(stepSize) <= Math.abs(minStepSize)) {
+        const finalDepth = baseline / currentInvZ;
+        const t = (-finalDepth - rayOriginProj.z) / rayDirProj.z;
+        const rayPosProj = rayOriginProj.clone().addScaledVector(rayDirProj, t);
+
+        // Check if valid
+        const px = (rayPosProj.x * fx / finalDepth) + cx - 0.5;
+        const py = (rayPosProj.y * fy / finalDepth) + cy - 0.5;
+
+        if (px >= 0 && px < width && py >= 0 && py < height) {
+          // Transform back to world space
+          const hitPointWorld = rayPosProj.applyMatrix4(projector.matrixWorld);
+          console.log(`Raycast converged in ${iterations} iterations at pixel (${px.toFixed(1)}, ${py.toFixed(1)})`);
+          return hitPointWorld;
+        }
+      }
+
+      console.log('Raycast failed to find intersection');
+      return null;
     }
 
     // Double-click to enter orbit mode
@@ -409,6 +498,9 @@
       const hitPoint = raycastPointCloud(mouseX, mouseY);
 
       if (hitPoint) {
+        // Create red marker at hit point
+        createHitMarker(hitPoint);
+
         orbitCenter.copy(hitPoint);
         orbitDistance = camera.position.distanceTo(orbitCenter);
 
@@ -710,6 +802,9 @@
           const hitPoint = raycastPointCloud(mouseX, mouseY);
 
           if (hitPoint) {
+            // Create red marker at hit point
+            createHitMarker(hitPoint);
+
             orbitCenter.copy(hitPoint);
             orbitDistance = camera.position.distanceTo(orbitCenter);
 
