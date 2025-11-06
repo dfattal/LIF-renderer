@@ -211,10 +211,12 @@
             '2 Fingers: Pan/Zoom<br>' +
             'Long Press: Reset view';
         } else {
+          const viewNavigation = loadedProjectors.length > 1 ? '←→: Switch views<br>' : '';
           controlsElement.innerHTML =
             'WASD+QE: Move camera<br>' +
             'Click+Drag: Look around<br>' +
             'Double Click: Orbit point<br>' +
+            viewNavigation +
             'R: Reset view<br>' +
             'M: Toggle mesh mode<br>' +
             'V: Toggle depth view<br>' +
@@ -228,9 +230,11 @@
             'Pinch: Zoom<br>' +
             'Long Press: Reset view';
         } else {
+          const viewNavigation = loadedProjectors.length > 1 ? '←→: Switch views<br>' : '';
           controlsElement.innerHTML =
             'Click+Drag: Rotate orbit<br>' +
             'Wheel: Zoom<br>' +
+            viewNavigation +
             'R: Reset view<br>' +
             'Escape: Exit orbit mode';
         }
@@ -311,6 +315,26 @@
             console.log('Depth visualization:', showDepth ? 'ON (show depth)' : 'OFF (show RGB)');
           }
           break;
+        case 'ArrowLeft':
+          // Previous view
+          if (loadedProjectors.length > 1) {
+            const viewSelect = document.getElementById('view-select');
+            const currentIndex = parseInt(viewSelect.value);
+            const newIndex = (currentIndex - 1 + loadedProjectors.length) % loadedProjectors.length;
+            viewSelect.value = newIndex.toString();
+            viewSelect.dispatchEvent(new Event('change'));
+          }
+          break;
+        case 'ArrowRight':
+          // Next view
+          if (loadedProjectors.length > 1) {
+            const viewSelect = document.getElementById('view-select');
+            const currentIndex = parseInt(viewSelect.value);
+            const newIndex = (currentIndex + 1) % loadedProjectors.length;
+            viewSelect.value = newIndex.toString();
+            viewSelect.dispatchEvent(new Event('change'));
+          }
+          break;
       }
     });
 
@@ -379,13 +403,17 @@
         return null;
       }
 
+      // Use projector's actual dimensions, not global width/height
+      const imgWidth = projector.width;
+      const imgHeight = projector.height;
+
       // Create temporary canvas to read depth texture
       const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = imgWidth;
+      canvas.height = imgHeight;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(depthTexture.image, 0, 0);
-      const imageData = ctx.getImageData(0, 0, width, height);
+      const imageData = ctx.getImageData(0, 0, imgWidth, imgHeight);
 
       const invZMin = projector.invDepthRange.min;
       const invZMax = projector.invDepthRange.max;
@@ -398,10 +426,10 @@
       // Helper function to sample depth map at pixel coordinates
       // Note: Y-flip handling - THREE.js textures have flipY=true by default
       function sampleDepthMap(px, py) {
-        if (px < 0 || px >= width || py < 0 || py >= height) return null;
+        if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) return null;
         // Flip Y coordinate to match texture coordinate system
-        const pyFlipped = (height - 1) - Math.floor(py);
-        const idx = (pyFlipped * width + Math.floor(px)) * 4;
+        const pyFlipped = (imgHeight - 1) - Math.floor(py);
+        const idx = (pyFlipped * imgWidth + Math.floor(px)) * 4;
         const depthValue = imageData.data[idx] / 255.0;
         const invZ = invZMax + depthValue * (invZMin - invZMax);
         if (Math.abs(invZ) < 1e-8) return null;
@@ -438,7 +466,7 @@
         const py = (rayPos.y * fy / currentDepth) + cy - 0.5;
 
         // Check if within image bounds
-        if (px < 0 || px >= width || py < 0 || py >= height) {
+        if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) {
           // Ray is outside image, advance
           currentInvZ += stepSize;
           if (currentInvZ > invZMin) break; // Past near plane
@@ -477,7 +505,7 @@
         const px = (rayPosProj.x * fx / finalDepth) + cx - 0.5;
         const py = (rayPosProj.y * fy / finalDepth) + cy - 0.5;
 
-        if (px >= 0 && px < width && py >= 0 && py < height) {
+        if (px >= 0 && px < imgWidth && py >= 0 && py < imgHeight) {
           // Transform back to world space
           const hitPointWorld = rayPosProj.applyMatrix4(projector.matrixWorld);
           console.log(`Raycast converged in ${iterations} iterations at pixel (${px.toFixed(1)}, ${py.toFixed(1)})`);

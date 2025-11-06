@@ -163,6 +163,13 @@ export class HoloRenderer extends THREE.Mesh {
     if (this.currentMeshMode === 1) {
       // Connected mesh mode
       if (!this.connectedMeshGeometry || this.currentProjector !== projector) {
+        // Dispose old connected mesh geometry to prevent memory leak
+        if (this.connectedMeshGeometry && this.currentProjector !== projector) {
+          console.log("HoloRenderer: Disposing old connected mesh geometry");
+          this.connectedMeshGeometry.dispose();
+          this.connectedMeshGeometry = null;
+        }
+
         // Generate connected mesh geometry
         this.connectedMeshGeometry = this.generateConnectedMesh(projector);
         this.geometry = this.connectedMeshGeometry;
