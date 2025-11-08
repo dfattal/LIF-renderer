@@ -1,5 +1,7 @@
 // Type definitions for LIF (Light Field Image) file format
 
+import * as THREE from "three";
+
 export interface LifView {
   // RGB image data
   image: {
@@ -97,4 +99,41 @@ export interface LifStereoRenderData {
 export interface LifData {
   views: LifView[];
   stereo_render_data?: LifStereoRenderData;
+}
+
+/**
+ * Processed layer data for rendering
+ * Created by HoloProjector from LifView data
+ */
+export interface LayerData {
+  // Textures (loaded from URLs)
+  rgbTexture: THREE.Texture | null;
+  depthTexture: THREE.Texture | null;
+
+  // Original URLs (for raycast plane texture loading)
+  rgbUrl?: string;
+  depthUrl?: string;
+  maskUrl?: string;
+
+  // Dimensions
+  width: number;
+  height: number;
+
+  // Camera intrinsics
+  intrinsics: {
+    fx: number;
+    fy: number;
+    cx: number;
+    cy: number;
+  };
+
+  // Inverse depth range
+  invDepthRange: {
+    min: number;
+    max: number;
+    baseline?: number;
+  };
+
+  // Layer ordering (for multi-layer rendering)
+  renderOrder?: number;
 }

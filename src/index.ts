@@ -3,8 +3,10 @@
 
 export { HoloProjector } from "./HoloProjector";
 export { HoloRenderer } from "./HoloRenderer";
+export { HoloLayerGroup } from "./HoloLayerGroup";
+export { RaycastPlane } from "./RaycastPlane";
 export type { HoloProjectorOptions } from "./HoloProjector";
-export type { HoloRendererOptions } from "./HoloRenderer";
+export type { HoloRendererOptions, RenderMode } from "./HoloRenderer";
 
 // LIF file format support
 export {

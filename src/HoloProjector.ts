@@ -62,6 +62,9 @@ export class HoloProjector extends THREE.Object3D {
   width: number;
   height: number;
 
+  // Layer data for multi-layer rendering (LDI support)
+  lifLayers: import("./types/lif").LayerData[] = [];
+
   // Frustum visualization (Group containing LineSegments)
   frustumHelper: THREE.Group;
 
@@ -120,6 +123,17 @@ export class HoloProjector extends THREE.Object3D {
     const quaternion = lifRotationToQuaternion(view.rotation);
     projector.quaternion.copy(quaternion);
 
+    // Handle multi-layer LDI if present
+    await projector.initialized; // Wait for main layer to load
+
+    console.log('HoloProjector.fromLifView - checking for layers_top_to_bottom:', view.layers_top_to_bottom);
+    if (view.layers_top_to_bottom && view.layers_top_to_bottom.length > 0) {
+      console.log(`Found ${view.layers_top_to_bottom.length} layers in layers_top_to_bottom`);
+      projector.populateLifLayersFromView(view);
+    } else {
+      console.log('No layers_top_to_bottom found, using single layer');
+    }
+
     return projector;
   }
 
@@ -135,6 +149,9 @@ export class HoloProjector extends THREE.Object3D {
     // Initialize dimensions
     this.width = options.width || 0;
     this.height = options.height || 0;
+
+    // Initialize empty lifLayers array (will be populated after texture loading)
+    this.lifLayers = [];
 
     // Set up textures
     if (options.rgbTexture) {
@@ -166,6 +183,8 @@ export class HoloProjector extends THREE.Object3D {
         return this;
       });
     } else {
+      // Textures provided directly, populate lifLayers immediately
+      this.populateLifLayers(options);
       this.isInitialized = true;
       this.initialized = Promise.resolve(this);
       if (options.onLoad) {
@@ -236,6 +255,115 @@ export class HoloProjector extends THREE.Object3D {
     }
 
     await Promise.all(promises);
+
+    // Populate lifLayers with single layer from main textures
+    this.populateLifLayers(options);
+  }
+
+  /**
+   * Populate lifLayers array from loaded textures
+   * This creates a single-layer representation for standard single-view projectors
+   */
+  private populateLifLayers(options: HoloProjectorOptions): void {
+    this.lifLayers = [{
+      rgbTexture: this.rgbTexture,
+      depthTexture: this.depthTexture,
+      rgbUrl: options.rgbUrl,
+      depthUrl: options.depthUrl,
+      maskUrl: undefined,
+      width: this.width,
+      height: this.height,
+      intrinsics: { ...this.intrinsics },
+      invDepthRange: { ...this.invDepthRange },
+      renderOrder: 0,
+    }];
+
+    console.log(`HoloProjector: Populated ${this.lifLayers.length} layer(s)`);
+  }
+
+  /**
+   * Populate lifLayers from multi-layer LIF view data
+   * Handles layered depth images (LDI) with multiple depth layers
+   */
+  public populateLifLayersFromView(view: LifView): void {
+    const layers = view.layers_top_to_bottom;
+    console.log('populateLifLayersFromView called with:', {
+      hasLayers: !!layers,
+      layerCount: layers?.length,
+      layers: layers
+    });
+
+    if (!layers || layers.length === 0) {
+      console.warn("populateLifLayersFromView called with no layers");
+      return;
+    }
+
+    // Clear existing single layer
+    this.lifLayers = [];
+    console.log('Cleared existing lifLayers, processing', layers.length, 'new layers');
+
+    // Process each layer
+    for (let i = 0; i < layers.length; i++) {
+      const layer = layers[i];
+      console.log(`Processing layer ${i}:`, {
+        hasImage: !!layer.image,
+        imageUrl: layer.image?.url,
+        hasInvZMap: !!layer.inv_z_map,
+        invZMapUrl: layer.inv_z_map?.url,
+        hasMask: !!layer.mask,
+        maskUrl: layer.mask?.url,
+        width_px: layer.width_px,
+        height_px: layer.height_px
+      });
+
+      // Get layer dimensions (fallback to view dimensions)
+      const width = layer.width_px ?? view.width_px;
+      const height = layer.height_px ?? view.height_px;
+
+      // Get focal length (fallback to view focal length)
+      const focal = layer.focal_px ?? view.focal_px;
+
+      // Get intrinsics (use camera_data if available, otherwise compute from focal)
+      let intrinsics;
+      if (layer.camera_data) {
+        intrinsics = {
+          fx: layer.camera_data.focal_ratio_to_width * width,
+          fy: layer.camera_data.focal_ratio_to_width * width,
+          cx: width / 2,
+          cy: height / 2,
+        };
+      } else {
+        intrinsics = {
+          fx: focal,
+          fy: focal,
+          cx: width / 2,
+          cy: height / 2,
+        };
+      }
+
+      // Create layer data
+      const layerData = {
+        rgbTexture: null, // Will be loaded on demand by RaycastPlane
+        depthTexture: null,
+        rgbUrl: layer.image?.url,
+        depthUrl: layer.inv_z_map?.url,
+        maskUrl: layer.mask?.url,
+        width,
+        height,
+        intrinsics,
+        invDepthRange: {
+          min: layer.inv_z_map?.min ?? view.inv_z_map.min,
+          max: layer.inv_z_map?.max ?? view.inv_z_map.max,
+          baseline: this.invDepthRange.baseline,
+        },
+        renderOrder: i, // Front-to-back ordering
+      };
+      console.log(`Pushing layer ${i} to lifLayers:`, layerData);
+      this.lifLayers.push(layerData);
+    }
+
+    console.log(`HoloProjector: Populated ${this.lifLayers.length} LDI layer(s) from view`);
+    console.log('Final lifLayers array:', this.lifLayers);
   }
 
   dispose(): void {
@@ -373,8 +501,6 @@ function createHoloRendererDetectionMesh(): THREE.Mesh {
       scene.add(
         new HoloRenderer({
           renderer,
-          pointSize: 1.0, // 1.0 = perfect square tiling (no gaps/overlaps)
-          maxStdDev: 2.0, // Not used for square rendering
         }),
       );
     }

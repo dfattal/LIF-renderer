@@ -1,76 +1,78 @@
 import * as THREE from "three";
 
 import type { HoloProjector } from "./HoloProjector";
+import type { LayerData } from "./types/lif";
+import { RaycastPlane } from "./RaycastPlane";
 import holoFragment from "./shaders/holoFragment.glsl";
 import holoVertex from "./shaders/holoVertex.glsl";
 
+export type RenderMode = 'mesh' | 'raytracing';
+
 export type HoloRendererOptions = {
-  // The THREE.WebGLRenderer instance
-  renderer: THREE.WebGLRenderer;
-  // Maximum standard deviation for Gaussian falloff
-  maxStdDev?: number;
-  // Base point size in pixels
-  pointSize?: number;
+  // The THREE.WebGLRenderer instance (optional)
+  renderer?: THREE.WebGLRenderer;
   // Enable depth writing for proper occlusion
   depthWrite?: boolean;
+  // Render mode: mesh or raytracing
+  renderMode?: RenderMode;
 };
 
-// Geometry for rendering a single quad (2 triangles)
-// Each instance will use this geometry to draw one pixel
-const QUAD_VERTICES = new Float32Array([
-  -1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0,
-]);
-
-const QUAD_INDICES = new Uint16Array([0, 1, 2, 0, 2, 3]);
-
 export class HoloRenderer extends THREE.Mesh {
-  renderer: THREE.WebGLRenderer;
+  renderer?: THREE.WebGLRenderer;
   material: THREE.ShaderMaterial;
   uniforms: ReturnType<typeof HoloRenderer.makeUniforms>;
 
-  maxStdDev: number;
-  pointSize: number;
+  // Render mode
+  private renderMode: RenderMode;
 
   // Track active projectors
   private activeProjectors: HoloProjector[] = [];
   private currentProjector: HoloProjector | null = null;
 
-  // Store different geometry types for different modes
-  private instancedGeometry: THREE.InstancedBufferGeometry;
+  // Debug flag to only log renderer count once
+  private hasLoggedRendererCount = false;
+
+  // Single-layer assignment (for use with HoloLayerGroup)
+  public assignedLayer: LayerData | null = null;
+  public assignedProjector: HoloProjector | null = null;
+
+  // Mesh rendering
   private connectedMeshGeometry: THREE.BufferGeometry | null = null;
-  private currentMeshMode: number = 0; // 0=billboard, 1=connected mesh
+
+  // Raytracing rendering
+  private raycastPlane: RaycastPlane | null = null;
 
   static EMPTY_TEXTURE = new THREE.Texture();
 
-  constructor(options: HoloRendererOptions) {
+  constructor(optionsOrRenderMode?: HoloRendererOptions | RenderMode) {
     console.log("HoloRenderer: Constructing...");
+
+    // Support both old API (HoloRendererOptions) and new API (RenderMode string)
+    let options: HoloRendererOptions;
+    if (typeof optionsOrRenderMode === 'string') {
+      options = { renderMode: optionsOrRenderMode };
+    } else {
+      options = optionsOrRenderMode ?? {};
+    }
+
     const uniforms = HoloRenderer.makeUniforms();
-    const depthWrite = options.depthWrite ?? true; // Enable by default
+    const depthWrite = options.depthWrite ?? true; // Enable by default for proper occlusion
     const material = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: holoVertex,
       fragmentShader: holoFragment,
       uniforms,
       transparent: true,
-      premultipliedAlpha: true, // Better alpha blending with depth
+      premultipliedAlpha: true,
       depthTest: true,
       depthWrite: depthWrite,
       side: THREE.DoubleSide,
     });
 
-    // Create base geometry (will be instanced)
-    const geometry = new THREE.InstancedBufferGeometry();
-    geometry.setAttribute(
-      "position",
-      new THREE.BufferAttribute(QUAD_VERTICES, 3),
-    );
-    geometry.setIndex(new THREE.BufferAttribute(QUAD_INDICES, 1));
-    geometry.instanceCount = 0; // Will be updated per projector
+    // Create empty base geometry (will be replaced)
+    const geometry = new THREE.BufferGeometry();
 
     super(geometry, material);
-
-    // Store reference to instanced geometry
-    this.instancedGeometry = geometry;
 
     // Disable frustum culling
     this.frustumCulled = false;
@@ -79,12 +81,10 @@ export class HoloRenderer extends THREE.Mesh {
     this.material = material;
     this.uniforms = uniforms;
 
-    this.maxStdDev = options.maxStdDev ?? 1.0;
-    this.pointSize = options.pointSize ?? 2.0;
+    // Set render mode (default to mesh)
+    this.renderMode = options.renderMode ?? 'mesh';
 
-    console.log("HoloRenderer: Created successfully");
-    console.log("  Vertex shader length:", holoVertex.length);
-    console.log("  Fragment shader length:", holoFragment.length);
+    console.log("HoloRenderer: Created successfully with mode:", this.renderMode);
   }
 
   static makeUniforms() {
@@ -109,14 +109,12 @@ export class HoloRenderer extends THREE.Mesh {
       // Inverse depth range
       invZMin: { value: 0.1 },
       invZMax: { value: 0.01 },
-      baseline: { value: 1.0 }, // Baseline for stereo depth (default 1.0 = no baseline)
+      baseline: { value: 1.0 },
 
-      // Rendering parameters
-      maxStdDev: { value: 1.0 },
-      pointSize: { value: 2.0 },
-      meshMode: { value: 0.0 }, // 0 = billboard mode, 1 = connected mesh mode
-      deltaInvZThreshold: { value: 0.0 }, // Discard mesh elements if invZ range exceeds this (0 = show all)
-      showDepth: { value: 0.0 }, // 0 = show RGB, 1 = show depth visualization
+      // Mesh rendering parameters
+      meshMode: { value: 1.0 }, // Always 1 for connected mesh
+      deltaInvZThreshold: { value: 0.0 },
+      showDepth: { value: 0.0 },
     };
   }
 
@@ -125,11 +123,33 @@ export class HoloRenderer extends THREE.Mesh {
     scene: THREE.Scene,
     camera: THREE.Camera,
   ) {
-    // Find all HoloProjector instances in the scene
+    // Debug: Check how many HoloRenderer instances exist (only log once)
+    if (!this.hasLoggedRendererCount) {
+      let rendererCount = 0;
+      scene.traverse((obj) => {
+        if (obj instanceof HoloRenderer) {
+          rendererCount++;
+        }
+      });
+      if (rendererCount > 1) {
+        console.warn(`Found ${rendererCount} HoloRenderer instances in scene!`);
+      }
+      this.hasLoggedRendererCount = true;
+    }
+
+    // Single-layer mode: If this renderer has been assigned a specific layer
+    if (this.assignedLayer && this.assignedProjector) {
+      if (this.renderMode === 'mesh') {
+        this.renderMeshLayer(this.assignedLayer, this.assignedProjector, camera, renderer);
+      } else {
+        this.renderRaycastLayer(this.assignedLayer, this.assignedProjector, camera, renderer);
+      }
+      return;
+    }
+
+    // Legacy multi-projector mode: Find all HoloProjector instances in the scene
     this.activeProjectors = [];
     scene.traverse((obj) => {
-      // Use duck typing to check for HoloProjector properties
-      // since we can't import HoloProjector here (circular dependency)
       if (
         "rgbTexture" in obj &&
         "depthTexture" in obj &&
@@ -141,192 +161,224 @@ export class HoloRenderer extends THREE.Mesh {
     });
 
     if (this.activeProjectors.length === 0) {
-      console.log("HoloRenderer: No active projectors found");
+      return; // No projectors, nothing to render
     }
 
-    // Render each projector
-    // Note: For multiple projectors, we'd need to render them separately
-    // For now, we'll render the first one found
-    if (this.activeProjectors.length > 0) {
+    // Render projector(s)
+    if (this.renderMode === 'mesh') {
+      // Mesh mode: render first projector only
       const projector = this.activeProjectors[0];
-      this.renderProjector(projector, camera);
+      this.renderMeshProjector(projector, camera);
     } else {
-      // No projectors, hide the geometry
-      (this.geometry as THREE.InstancedBufferGeometry).instanceCount = 0;
+      // Raytracing mode: pass all projectors for stereo support
+      if (this.activeProjectors[0].lifLayers.length > 0) {
+        this.renderRaycastLayerStereo(this.activeProjectors, camera, renderer, scene);
+      } else {
+        console.warn("Raytracing mode requires lifLayers to be populated");
+      }
     }
   }
 
-  private renderProjector(projector: HoloProjector, camera: THREE.Camera) {
-    const numPixels = projector.width * projector.height;
-
-    // Switch geometry based on mesh mode
-    if (this.currentMeshMode === 1) {
-      // Connected mesh mode
-      if (!this.connectedMeshGeometry || this.currentProjector !== projector) {
-        // Dispose old connected mesh geometry to prevent memory leak
-        if (this.connectedMeshGeometry && this.currentProjector !== projector) {
-          console.log("HoloRenderer: Disposing old connected mesh geometry");
-          this.connectedMeshGeometry.dispose();
-          this.connectedMeshGeometry = null;
-        }
-
-        // Generate connected mesh geometry
-        this.connectedMeshGeometry = this.generateConnectedMesh(projector);
-        this.geometry = this.connectedMeshGeometry;
-        this.geometry.attributes.position.needsUpdate = true;
-        if (this.geometry.attributes.uv) {
-          this.geometry.attributes.uv.needsUpdate = true;
-        }
-        console.log("HoloRenderer: Switched to connected mesh geometry");
-      } else if (this.geometry !== this.connectedMeshGeometry) {
-        // Ensure we're using the connected mesh geometry
-        this.geometry = this.connectedMeshGeometry;
-        this.geometry.attributes.position.needsUpdate = true;
-      }
-    } else {
-      // Billboard mode (instanced)
-      if (this.geometry !== this.instancedGeometry) {
-        this.geometry = this.instancedGeometry;
-        this.geometry.attributes.position.needsUpdate = true;
-      }
-      (this.geometry as THREE.InstancedBufferGeometry).instanceCount = numPixels;
-    }
-
-    // Log only once when projector changes
-    if (this.currentProjector !== projector) {
-      console.log("HoloRenderer: Rendering projector");
-      console.log("  Num pixels (instances):", numPixels);
-      console.log(
-        "  Image dimensions:",
-        projector.width,
-        "x",
-        projector.height,
-      );
-      console.log("  RGB texture:", projector.rgbTexture);
-      console.log("  Depth texture:", projector.depthTexture);
-      console.log("  Intrinsics:", projector.intrinsics);
-      console.log("  InvZ range:", projector.invDepthRange);
+  /**
+   * Render a single layer using connected mesh geometry
+   */
+  private renderMeshLayer(
+    layer: LayerData,
+    projector: HoloProjector,
+    camera: THREE.Camera,
+    renderer: THREE.WebGLRenderer,
+  ) {
+    // Track the current projector to avoid regenerating geometry
+    const projectorChanged = this.currentProjector !== projector;
+    if (projectorChanged) {
       this.currentProjector = projector;
     }
 
+    // Generate or reuse connected mesh geometry
+    if (!this.connectedMeshGeometry || projectorChanged) {
+      if (this.connectedMeshGeometry && projectorChanged) {
+        this.connectedMeshGeometry.dispose();
+        this.connectedMeshGeometry = null;
+      }
+
+      // Generate connected mesh using layer dimensions
+      const tempProjector = {
+        width: layer.width,
+        height: layer.height,
+      } as any;
+      this.connectedMeshGeometry = this.generateConnectedMesh(tempProjector);
+      this.geometry = this.connectedMeshGeometry;
+      this.geometry.attributes.position.needsUpdate = true;
+      if (this.geometry.attributes.uv) {
+        this.geometry.attributes.uv.needsUpdate = true;
+      }
+    } else if (this.geometry !== this.connectedMeshGeometry) {
+      this.geometry = this.connectedMeshGeometry;
+      this.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // Update uniforms
+    projector.updateMatrixWorld();
+    this.uniforms.projectorMatrix.value.copy(projector.matrixWorld);
+    this.uniforms.baseline.value = projector.invDepthRange.baseline ?? 1.0;
+
     // Update textures
+    this.uniforms.rgbTexture.value = layer.rgbTexture || HoloRenderer.EMPTY_TEXTURE;
+    this.uniforms.depthTexture.value = layer.depthTexture || HoloRenderer.EMPTY_TEXTURE;
+
+    // Update camera intrinsics
+    this.uniforms.fx.value = layer.intrinsics.fx;
+    this.uniforms.fy.value = layer.intrinsics.fy;
+    this.uniforms.cx.value = layer.intrinsics.cx;
+    this.uniforms.cy.value = layer.intrinsics.cy;
+
+    // Update image dimensions
+    this.uniforms.imageWidth.value = layer.width;
+    this.uniforms.imageHeight.value = layer.height;
+
+    // Update inverse depth range
+    this.uniforms.invZMin.value = layer.invDepthRange.min;
+    this.uniforms.invZMax.value = layer.invDepthRange.max;
+
+    // Set render order for proper layering
+    this.renderOrder = layer.renderOrder ?? 0;
+  }
+
+  /**
+   * Render using raycast plane with stereo support (for multi-layer LDI)
+   */
+  private async renderRaycastLayerStereo(
+    projectors: HoloProjector[],
+    camera: THREE.Camera,
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+  ) {
+    // Create raycast plane on first render
+    if (!this.raycastPlane) {
+      // Create plane with initial size (will be recalculated in updatePlaneDistance)
+      this.raycastPlane = new RaycastPlane(1, 1);
+
+      // Get invd from global stereo_render_data if available
+      const stereoData = (window as any).lifStereoRenderData;
+      const invd = stereoData ? (stereoData.invd ?? stereoData.inv_convergence_distance) : undefined;
+
+      // Pass all projectors (1 for mono, 2 for stereo) and invd
+      await this.raycastPlane.initializeFromProjector(projectors, invd);
+
+      // Update plane size to match camera FOV (only needs to be done once, or on window resize)
+      this.raycastPlane.updatePlaneSizeFromCamera(camera);
+
+      // Add to scene (not as child of projector - it will follow camera instead)
+      scene.add(this.raycastPlane);
+      console.log("RaycastPlane created and initialized, added to scene");
+    }
+
+    // Update dynamic uniforms and transform
+    this.raycastPlane.updateDynamicUniforms(camera, renderer);
+    this.raycastPlane.updatePlaneTransform(camera);
+
+    // Hide the mesh geometry when in raytracing mode
+    if (this.geometry !== new THREE.BufferGeometry()) {
+      this.geometry = new THREE.BufferGeometry();
+    }
+  }
+
+  /**
+   * Render using raycast plane (for multi-layer LDI) - legacy single-layer mode
+   */
+  private async renderRaycastLayer(
+    layer: LayerData,
+    projector: HoloProjector,
+    camera: THREE.Camera,
+    renderer: THREE.WebGLRenderer,
+  ) {
+    // Create raycast plane on first render
+    if (!this.raycastPlane) {
+      const scale = 1.0 / 100; // Scale down to reasonable size
+      this.raycastPlane = new RaycastPlane(
+        layer.width * scale,
+        layer.height * scale
+      );
+      await this.raycastPlane.initializeFromProjector(projector);
+      this.add(this.raycastPlane); // Add as child
+      console.log("RaycastPlane created and initialized");
+    }
+
+    // Update dynamic uniforms and transform
+    this.raycastPlane.updateDynamicUniforms(camera, renderer);
+    this.raycastPlane.updatePlaneTransform(camera);
+
+    // Hide the mesh geometry when in raytracing mode
+    if (this.geometry !== new THREE.BufferGeometry()) {
+      this.geometry = new THREE.BufferGeometry();
+    }
+  }
+
+  /**
+   * Legacy method: Render entire projector using mesh
+   */
+  private renderMeshProjector(projector: HoloProjector, camera: THREE.Camera) {
+    // Generate or reuse connected mesh geometry
+    if (!this.connectedMeshGeometry || this.currentProjector !== projector) {
+      if (this.connectedMeshGeometry && this.currentProjector !== projector) {
+        this.connectedMeshGeometry.dispose();
+        this.connectedMeshGeometry = null;
+      }
+
+      this.connectedMeshGeometry = this.generateConnectedMesh(projector);
+      this.geometry = this.connectedMeshGeometry;
+      this.geometry.attributes.position.needsUpdate = true;
+      if (this.geometry.attributes.uv) {
+        this.geometry.attributes.uv.needsUpdate = true;
+      }
+      console.log("HoloRenderer: Generated connected mesh geometry");
+    } else if (this.geometry !== this.connectedMeshGeometry ||
+               this.geometry === new THREE.BufferGeometry() ||
+               !this.geometry.attributes.position) {
+      // Restore mesh geometry if it was hidden for raytracing
+      this.geometry = this.connectedMeshGeometry;
+      this.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // Update uniforms
     this.uniforms.rgbTexture.value = projector.rgbTexture;
     this.uniforms.depthTexture.value = projector.depthTexture;
 
-    // Update projector transform
     projector.updateMatrixWorld();
     this.uniforms.projectorMatrix.value.copy(projector.matrixWorld);
 
-    // Update camera intrinsics
     this.uniforms.fx.value = projector.intrinsics.fx;
     this.uniforms.fy.value = projector.intrinsics.fy;
     this.uniforms.cx.value = projector.intrinsics.cx;
     this.uniforms.cy.value = projector.intrinsics.cy;
 
-    // Update image dimensions
     this.uniforms.imageWidth.value = projector.width;
     this.uniforms.imageHeight.value = projector.height;
 
-    // Update inverse depth range
     this.uniforms.invZMin.value = projector.invDepthRange.min;
     this.uniforms.invZMax.value = projector.invDepthRange.max;
     this.uniforms.baseline.value = projector.invDepthRange.baseline ?? 1.0;
 
-    // Update rendering parameters
-    this.uniforms.maxStdDev.value = this.maxStdDev;
-    this.uniforms.pointSize.value = this.pointSize;
+    this.currentProjector = projector;
   }
 
-  // Get the list of active projectors being rendered
-  getActiveProjectors(): HoloProjector[] {
-    return this.activeProjectors;
-  }
-
-  // Set mesh mode (0 = billboard, 1 = connected mesh)
-  setMeshMode(mode: number): void {
-    console.log('HoloRenderer: Setting mesh mode to', mode);
-    this.currentMeshMode = mode;
-    if (mode === 1) {
-      // Connected mesh mode
-      this.uniforms.meshMode.value = 1.0;
-      console.log('  meshMode uniform set to:', this.uniforms.meshMode.value);
-      // Geometry will be swapped in renderProjector
-    } else {
-      // Billboard mode - use instanced geometry
-      this.uniforms.meshMode.value = 0.0;
-      console.log('  meshMode uniform set to:', this.uniforms.meshMode.value);
-      if (this.geometry !== this.instancedGeometry) {
-        this.geometry = this.instancedGeometry;
-        this.geometry.attributes.position.needsUpdate = true;
-      }
-    }
-    // Force material update
-    this.material.needsUpdate = true;
-  }
-
-  // Cycle through mesh modes: 0 -> 1 -> 0
-  cycleMeshMode(): number {
-    const newMode = (this.currentMeshMode + 1) % 2;
-    this.setMeshMode(newMode);
-    return newMode;
-  }
-
-  // Get current mesh mode
-  getMeshMode(): number {
-    return this.currentMeshMode;
-  }
-
-  // Set gradient culling threshold (invZ range)
-  setGradientThreshold(threshold: number): void {
-    this.uniforms.deltaInvZThreshold.value = threshold;
-  }
-
-  // Get gradient culling threshold
-  getGradientThreshold(): number {
-    return this.uniforms.deltaInvZThreshold.value;
-  }
-
-  // Toggle depth visualization (shows depth map instead of RGB texture)
-  toggleDepthVisualization(): boolean {
-    const newValue = this.uniforms.showDepth.value > 0.5 ? 0.0 : 1.0;
-    this.uniforms.showDepth.value = newValue;
-    return newValue > 0.5;
-  }
-
-  // Get depth visualization state
-  getDepthVisualization(): boolean {
-    return this.uniforms.showDepth.value > 0.5;
-  }
-
-  // Generate connected mesh geometry from projector data
-  // Vertices are at pixel CORNERS (shared between neighbors)
-  // Pixel (i,j) has vertices at (i,j), (i+1,j), (i+1,j+1), (i,j+1)
-  // Quad center is at (i+0.5, j+0.5) - the pixel center
-  // RGB is sampled at pixel centers via UV interpolation
-  // Depth at corners is averaged from 4 neighboring pixel centers
-  private generateConnectedMesh(projector: HoloProjector): THREE.BufferGeometry {
+  /**
+   * Generate connected mesh geometry from projector data
+   */
+  private generateConnectedMesh(projector: { width: number; height: number }): THREE.BufferGeometry {
     const width = projector.width;
     const height = projector.height;
 
-    // Create vertex grid at pixel corners: (width+1) × (height+1) vertices
-    // Corner (x,y) is shared by up to 4 pixels: (x-1,y-1), (x,y-1), (x-1,y), (x,y)
     const numVertices = (width + 1) * (height + 1);
     const positions = new Float32Array(numVertices * 3);
     const uvs = new Float32Array(numVertices * 2);
 
-    // We'll compute positions in the shader, so initialize to zero
-    // The shader will interpolate depth from the 4 surrounding pixel centers
-
     let vertexIndex = 0;
     for (let y = 0; y <= height; y++) {
       for (let x = 0; x <= width; x++) {
-        // Store corner coordinates in UV
-        // Corner (x, y) is at pixel coordinate (x, y) in the image
-        // This will be used to compute the ray and sample surrounding pixels
         uvs[vertexIndex * 2] = x / width;
         uvs[vertexIndex * 2 + 1] = y / height;
 
-        // Position will be computed in shader
         positions[vertexIndex * 3] = 0;
         positions[vertexIndex * 3 + 1] = 0;
         positions[vertexIndex * 3 + 2] = 0;
@@ -335,26 +387,21 @@ export class HoloRenderer extends THREE.Mesh {
       }
     }
 
-    // Create face indices: each pixel becomes a quad (2 triangles)
-    // Pixel (px, py) uses corners at (px, py), (px+1, py), (px, py+1), (px+1, py+1)
     const numQuads = width * height;
     const indices = new Uint32Array(numQuads * 6);
 
     let indexCount = 0;
     for (let py = 0; py < height; py++) {
       for (let px = 0; px < width; px++) {
-        // Corner indices for this pixel's quad
         const topLeft = py * (width + 1) + px;
         const topRight = py * (width + 1) + (px + 1);
         const bottomLeft = (py + 1) * (width + 1) + px;
         const bottomRight = (py + 1) * (width + 1) + (px + 1);
 
-        // First triangle (top-left, bottom-left, top-right)
         indices[indexCount++] = topLeft;
         indices[indexCount++] = bottomLeft;
         indices[indexCount++] = topRight;
 
-        // Second triangle (top-right, bottom-left, bottom-right)
         indices[indexCount++] = topRight;
         indices[indexCount++] = bottomLeft;
         indices[indexCount++] = bottomRight;
@@ -369,7 +416,68 @@ export class HoloRenderer extends THREE.Mesh {
     return geometry;
   }
 
+  // Mode switching
+  public setRenderMode(mode: RenderMode): void {
+    if (this.renderMode === mode) return;
+
+    console.log(`HoloRenderer: Switching from ${this.renderMode} to ${mode}`);
+    this.renderMode = mode;
+
+    // Clean up old mode resources
+    if (mode === 'mesh' && this.raycastPlane) {
+      // Remove from parent (projector) not from this (HoloRenderer)
+      if (this.raycastPlane.parent) {
+        this.raycastPlane.parent.remove(this.raycastPlane);
+      }
+      this.raycastPlane.dispose();
+      this.raycastPlane = null;
+      console.log("RaycastPlane disposed and nulled in setRenderMode");
+    }
+
+    if (mode === 'raytracing' && this.connectedMeshGeometry) {
+      // Don't dispose mesh geometry, just hide it
+      this.geometry = new THREE.BufferGeometry();
+    }
+  }
+
+  public getRenderMode(): RenderMode {
+    return this.renderMode;
+  }
+
+  // Utility methods
+  getActiveProjectors(): HoloProjector[] {
+    return this.activeProjectors;
+  }
+
+  setGradientThreshold(threshold: number): void {
+    this.uniforms.deltaInvZThreshold.value = threshold;
+  }
+
+  getGradientThreshold(): number {
+    return this.uniforms.deltaInvZThreshold.value;
+  }
+
+  toggleDepthVisualization(): boolean {
+    const newValue = this.uniforms.showDepth.value > 0.5 ? 0.0 : 1.0;
+    this.uniforms.showDepth.value = newValue;
+    return newValue > 0.5;
+  }
+
+  getDepthVisualization(): boolean {
+    return this.uniforms.showDepth.value > 0.5;
+  }
+
   dispose(): void {
+    if (this.raycastPlane) {
+      this.raycastPlane.dispose();
+      this.raycastPlane = null;
+    }
+
+    if (this.connectedMeshGeometry) {
+      this.connectedMeshGeometry.dispose();
+      this.connectedMeshGeometry = null;
+    }
+
     this.geometry.dispose();
     this.material.dispose();
   }

@@ -11,6 +11,7 @@ import { createDepthMaskTexture, createRGBTexture, calculateViewportScale } from
  */
 export class RaycastPlane extends THREE.Mesh {
   private projector: HoloProjector | null = null;
+  private projectors: HoloProjector[] = []; // Store all projectors for stereo
   private viewCount: number = 1;
   private uniforms: { [uniform: string]: THREE.IUniform };
   private planeDistance: number = 1.0;
@@ -39,7 +40,19 @@ export class RaycastPlane extends THREE.Mesh {
     this.uniforms = uniforms;
     this.name = "RaycastPlane";
 
-    console.log("RaycastPlane created");
+    // Add red border helper for debugging
+    const borderGeometry = new THREE.EdgesGeometry(geometry);
+    const borderMaterial = new THREE.LineBasicMaterial({
+      color: 0xff0000,
+      linewidth: 5,
+      depthTest: false,
+      depthWrite: false
+    });
+    const border = new THREE.LineSegments(borderGeometry, borderMaterial);
+    border.renderOrder = 999; // Render on top
+    this.add(border);
+
+    console.log("RaycastPlane created with red border for debugging");
   }
 
   /**
@@ -61,7 +74,7 @@ export class RaycastPlane extends THREE.Mesh {
 
       // Visual effects
       feathering: { value: 0.1 },
-      background: { value: new THREE.Vector4(0.1, 0.1, 0.1, 1.0) },
+      background: { value: new THREE.Vector4(0, 0, 0, 0) }, // Transparent background
 
       // Mono view data (arrays for up to 4 layers)
       uImage: { value: Array(4).fill(null) },
@@ -108,35 +121,46 @@ export class RaycastPlane extends THREE.Mesh {
    */
   private static createVertexShader(): string {
     return `
-      attribute vec4 aVertexPosition;
-      attribute vec2 aTextureCoord;
       varying highp vec2 v_texcoord;
 
       void main(void) {
-        gl_Position = projectionMatrix * modelViewMatrix * position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         v_texcoord = uv;
       }
     `;
   }
 
   /**
-   * Initialize the plane from a HoloProjector
+   * Initialize the plane from HoloProjector(s)
+   * Pass single projector for mono, or array of 2 projectors for stereo
+   * @param projector - Single projector or array of projectors
+   * @param invd - Optional inverse convergence distance from stereo_render_data
    */
-  public async initializeFromProjector(projector: HoloProjector): Promise<void> {
-    this.projector = projector;
+  public async initializeFromProjector(
+    projector: HoloProjector | HoloProjector[],
+    invd?: number
+  ): Promise<void> {
+    // Handle array or single projector
+    this.projectors = Array.isArray(projector) ? projector : [projector];
+    this.projector = this.projectors[0]; // Store first projector for reference
 
-    // Determine view count (1 for mono, 2 for stereo)
-    // For now, we only support mono (single view)
-    this.viewCount = 1;
-
-    // Update shader based on view count
-    if (this.viewCount === 2) {
-      (this.material as THREE.ShaderMaterial).fragmentShader = rayCastStereoLDI;
-      (this.material as THREE.ShaderMaterial).needsUpdate = true;
+    // Store invd for plane distance calculation
+    if (invd !== undefined) {
+      (this as any).invdFromStereoData = invd;
+      console.log(`RaycastPlane: Using invd from stereo_render_data: ${invd}`);
     }
 
-    // Load textures for all layers
-    await this.loadLayerTextures(projector.lifLayers);
+    // Determine view count based on number of projectors
+    // For now, force mono rendering even if we have multiple projectors
+    this.viewCount = 1; // Force mono for now
+    console.log(`RaycastPlane: Initializing with ${this.projectors.length} projector(s), forcing mono rendering`);
+
+    // Always use mono shader for now
+    console.log('RaycastPlane: Using mono shader');
+
+    // Load textures for all layers from all projectors
+    // For now, always use mono rendering (single view)
+    await this.loadLayerTextures(this.projectors[0].lifLayers);
 
     // Calculate and set plane distance
     this.updatePlaneDistance();
@@ -144,11 +168,11 @@ export class RaycastPlane extends THREE.Mesh {
     // Set initial uniform values
     this.updateStaticUniforms();
 
-    console.log(`RaycastPlane initialized with ${projector.lifLayers.length} layers`);
+    console.log(`RaycastPlane initialized with ${this.projector.lifLayers.length} layers per view`);
   }
 
   /**
-   * Load RGB and depth+mask textures for all layers
+   * Load RGB and depth+mask textures for all layers (mono)
    */
   private async loadLayerTextures(layers: LayerData[]): Promise<void> {
     const maxLayers = Math.min(layers.length, 4);
@@ -184,22 +208,117 @@ export class RaycastPlane extends THREE.Mesh {
   }
 
   /**
-   * Calculate plane distance from projector: z = baseline_mm / invd
+   * Load RGB and depth+mask textures for stereo (left and right views)
+   */
+  private async loadStereoLayerTextures(layersL: LayerData[], layersR: LayerData[]): Promise<void> {
+    const maxLayers = Math.min(layersL.length, layersR.length, 4);
+    console.log(`Loading stereo textures: ${maxLayers} layers per view`);
+
+    for (let i = 0; i < maxLayers; i++) {
+      const layerL = layersL[i];
+      const layerR = layersR[i];
+
+      if (!layerL.rgbUrl || !layerL.depthUrl || !layerR.rgbUrl || !layerR.depthUrl) {
+        console.warn(`Layer ${i} missing texture URLs in one or both views`);
+        continue;
+      }
+
+      try {
+        // Load LEFT view textures
+        const rgbTextureL = await createRGBTexture(layerL.rgbUrl);
+        const depthMaskTextureL = await createDepthMaskTexture(
+          layerL.depthUrl,
+          layerL.maskUrl
+        );
+
+        // Load RIGHT view textures
+        const rgbTextureR = await createRGBTexture(layerR.rgbUrl);
+        const depthMaskTextureR = await createDepthMaskTexture(
+          layerR.depthUrl,
+          layerR.maskUrl
+        );
+
+        // Store with stereo marker (use negative indices for right view)
+        this.layerTextures.set(i, {
+          rgb: rgbTextureL,
+          depthMask: depthMaskTextureL,
+        });
+        this.layerTextures.set(i + 100, { // Right view offset by 100
+          rgb: rgbTextureR,
+          depthMask: depthMaskTextureR,
+        });
+
+        console.log(`Layer ${i} stereo textures loaded: L=${layerL.width}x${layerL.height}, R=${layerR.width}x${layerR.height}`);
+      } catch (error) {
+        console.error(`Failed to load stereo textures for layer ${i}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Calculate plane distance from baseline and invd
    */
   private updatePlaneDistance(): void {
     if (!this.projector) return;
 
-    // Get inverse convergence distance
-    const invd =
-      this.projector.invDepthRange.baseline ?? 0.1;
+    // Get baseline in meters
+    const baseline_mm = this.projector.invDepthRange.baseline ?? 0.045; // Default 45mm = 0.045m
 
-    // Get baseline in mm (or use 1.0 as default)
-    const baseline_mm = this.projector.invDepthRange.baseline ?? 1.0;
+    // Get inverse convergence distance from stereo_render_data or fallback
+    const invd = (this as any).invdFromStereoData ??
+                 (this.projector.invDepthRange.min + this.projector.invDepthRange.max) / 2;
 
-    // Calculate distance
+    // Calculate distance: z = baseline_mm / invd
     this.planeDistance = baseline_mm / invd;
 
-    console.log(`Plane distance: ${this.planeDistance} (baseline: ${baseline_mm}, invd: ${invd})`);
+    console.log(`Plane distance calculated: ${this.planeDistance}m (baseline: ${baseline_mm}m, invd: ${invd})`);
+  }
+
+  /**
+   * Update plane size to match camera FOV at the current distance
+   * Call this on initialization and window resize
+   */
+  public updatePlaneSizeFromCamera(camera: THREE.Camera): void {
+    if (!this.projector) return;
+
+    // Calculate plane size based on camera FOV at plane distance
+    // Formula: size = 2 * distance * tan(fov / 2)
+    if ((camera as THREE.PerspectiveCamera).fov) {
+      const fovRadians = THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov);
+      const aspect = (camera as THREE.PerspectiveCamera).aspect;
+
+      const planeHeight = 2 * this.planeDistance * Math.tan(fovRadians / 2);
+      const planeWidth = planeHeight * aspect;
+
+      // Update the plane geometry to match
+      const newGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+      this.geometry.dispose();
+      this.geometry = newGeometry;
+
+      // Recreate the border with new geometry
+      const children = this.children.filter(c => c.type === 'LineSegments');
+      children.forEach(c => {
+        this.remove(c);
+        (c as any).geometry?.dispose();
+      });
+      const borderGeometry = new THREE.EdgesGeometry(newGeometry);
+      const borderMaterial = new THREE.LineBasicMaterial({
+        color: 0xff0000,
+        linewidth: 5,
+        depthTest: false,
+        depthWrite: false
+      });
+      const border = new THREE.LineSegments(borderGeometry, borderMaterial);
+      border.renderOrder = 999;
+      this.add(border);
+
+      console.log(`Plane size updated from camera FOV:`, {
+        distance: this.planeDistance,
+        fov: (camera as THREE.PerspectiveCamera).fov,
+        aspect,
+        planeSize: [planeWidth, planeHeight]
+      });
+    }
   }
 
   /**
@@ -211,95 +330,182 @@ export class RaycastPlane extends THREE.Mesh {
     const layers = this.projector.lifLayers;
     const numLayers = Math.min(layers.length, 4);
 
-    // Update layer count
-    this.uniforms.uNumLayers.value = numLayers;
+    if (this.viewCount === 1) {
+      // Mono rendering
+      this.uniforms.uNumLayers.value = numLayers;
 
-    // Bind textures and set layer-specific uniforms
-    for (let i = 0; i < numLayers; i++) {
-      const layer = layers[i];
-      const textures = this.layerTextures.get(i);
+      for (let i = 0; i < numLayers; i++) {
+        const layer = layers[i];
+        const textures = this.layerTextures.get(i);
 
-      if (!textures) continue;
+        if (!textures) continue;
 
-      // Bind textures
-      this.uniforms.uImage.value[i] = textures.rgb;
-      this.uniforms.uDisparityMap.value[i] = textures.depthMask;
+        // Bind textures
+        this.uniforms.uImage.value[i] = textures.rgb;
+        this.uniforms.uDisparityMap.value[i] = textures.depthMask;
 
-      // Set inverse depth range
-      this.uniforms.invZmin.value[i] = layer.invDepthRange.min;
-      this.uniforms.invZmax.value[i] = layer.invDepthRange.max;
+        // Set inverse depth range (scale by 1/baseline_mm to convert to normalized space)
+        const baseline_mm = layer.invDepthRange.baseline ?? 0.045;
+        this.uniforms.invZmin.value[i] = layer.invDepthRange.min / baseline_mm;
+        this.uniforms.invZmax.value[i] = layer.invDepthRange.max / baseline_mm;
 
-      // Set focal length
-      this.uniforms.f1.value[i] = layer.intrinsics.fx;
+        // Set focal length (in pixels)
+        this.uniforms.f1.value[i] = layer.intrinsics.fx;
 
-      // Set image resolution
-      this.uniforms.iRes.value[i] = new THREE.Vector2(layer.width, layer.height);
+        // Set image resolution (in pixels)
+        this.uniforms.iRes.value[i] = new THREE.Vector2(layer.width, layer.height);
+      }
+
+      // Set source view position (projector position in THREE.js world space)
+      // Note: This is already in meters, scaled by baseline_mm during projector creation
+      this.uniforms.uViewPosition.value.copy(this.projector.position);
+
+      // View transform parameters (skew, slant, roll)
+      // These are currently zero because:
+      // - frustum_skew is handled via principal point offset (cx, cy)
+      // - rotation is handled via projector's quaternion transform
+      this.uniforms.sk1.value.set(0, 0);
+      this.uniforms.sl1.value.set(0, 0);
+      this.uniforms.roll1.value = 0;
+
+      console.log('Mono view uniforms set:', {
+        uViewPosition: this.uniforms.uViewPosition.value.toArray(),
+        f1: this.uniforms.f1.value,
+        iRes: this.uniforms.iRes.value.map((v: any) => [v.x, v.y]),
+        invZranges: layers.map((l, i) => [this.uniforms.invZmin.value[i], this.uniforms.invZmax.value[i]]),
+        numLayers
+      });
+
+    } else if (this.viewCount === 2) {
+      // Stereo rendering
+      this.uniforms.uNumLayersL.value = numLayers;
+      this.uniforms.uNumLayersR.value = numLayers;
+
+      for (let i = 0; i < numLayers; i++) {
+        const layer = layers[i];
+
+        // LEFT view (index i)
+        const texturesL = this.layerTextures.get(i);
+        if (texturesL) {
+          this.uniforms.uImageL.value[i] = texturesL.rgb;
+          this.uniforms.uDisparityMapL.value[i] = texturesL.depthMask;
+          this.uniforms.invZminL.value[i] = layer.invDepthRange.min;
+          this.uniforms.invZmaxL.value[i] = layer.invDepthRange.max;
+          this.uniforms.f1L.value[i] = layer.intrinsics.fx;
+          this.uniforms.iResL.value[i] = new THREE.Vector2(layer.width, layer.height);
+        }
+
+        // RIGHT view (index i + 100)
+        const texturesR = this.layerTextures.get(i + 100);
+        if (texturesR) {
+          this.uniforms.uImageR.value[i] = texturesR.rgb;
+          this.uniforms.uDisparityMapR.value[i] = texturesR.depthMask;
+          this.uniforms.invZminR.value[i] = layer.invDepthRange.min;
+          this.uniforms.invZmaxR.value[i] = layer.invDepthRange.max;
+          this.uniforms.f1R.value[i] = layer.intrinsics.fx;
+          this.uniforms.iResR.value[i] = new THREE.Vector2(layer.width, layer.height);
+        }
+      }
+
+      // Set LEFT and RIGHT view positions from projectors
+      this.uniforms.uViewPositionL.value.copy(this.projectors[0].position);
+      this.uniforms.sk1L.value.set(0, 0);
+      this.uniforms.sl1L.value.set(0, 0);
+      this.uniforms.roll1L.value = 0;
+
+      if (this.projectors.length > 1) {
+        this.uniforms.uViewPositionR.value.copy(this.projectors[1].position);
+        this.uniforms.sk1R.value.set(0, 0);
+        this.uniforms.sl1R.value.set(0, 0);
+        this.uniforms.roll1R.value = 0;
+      }
     }
 
-    // Set original image dimensions (from first layer)
+    // Set iResOriginal to physical plane size (same as oRes)
+    // This is calculated in updatePlaneDistance() as:
+    // planeWidth = (layer.width * planeDistance) / fx
+    // planeHeight = (layer.height * planeDistance) / fy
     if (layers[0]) {
-      this.uniforms.iResOriginal.value.set(layers[0].width, layers[0].height);
+      const planeGeometry = this.geometry as THREE.PlaneGeometry;
+      const planeWidth = planeGeometry.parameters.width;
+      const planeHeight = planeGeometry.parameters.height;
+      this.uniforms.iResOriginal.value.set(planeWidth, planeHeight);
     }
 
-    // Set source view position (from projector)
-    this.uniforms.uViewPosition.value.copy(this.projector.position);
-
-    // Set source view transforms
-    // For now, use default values (no rotation/skew)
-    this.uniforms.sk1.value.set(0, 0);
-    this.uniforms.sl1.value.set(0, 0);
-    this.uniforms.roll1.value = 0;
-
-    console.log("Static uniforms updated");
+    console.log(`Static uniforms updated for ${this.viewCount} view(s)`);
   }
 
   /**
    * Update view-dependent uniforms (called every frame)
+   * These represent the render camera (where we're viewing from)
    */
   public updateDynamicUniforms(camera: THREE.Camera, renderer: THREE.WebGLRenderer): void {
     if (!this.projector) return;
 
-    // Update camera position (in world space, will need to convert to normalized space)
-    this.uniforms.uFacePosition.value.copy(camera.position);
-
-    // Update viewport resolution
-    const canvas = renderer.domElement;
-    this.uniforms.oRes.value.set(canvas.width, canvas.height);
-
-    // Calculate viewport scale
-    const viewportScale = calculateViewportScale(
-      this.uniforms.iResOriginal.value.x,
-      this.uniforms.iResOriginal.value.y,
-      canvas.width,
-      canvas.height
+    // Update render camera position with Z flipped
+    this.uniforms.uFacePosition.value.set(
+      camera.position.x,
+      camera.position.y,
+      -camera.position.z
     );
 
-    // Update focal length with viewport scaling
-    if (this.projector.lifLayers[0]) {
-      this.uniforms.f2.value = this.projector.lifLayers[0].intrinsics.fx * viewportScale;
+    // Get raycast plane physical size (in meters)
+    const planeGeometry = this.geometry as THREE.PlaneGeometry;
+    const planeWidth = planeGeometry.parameters.width;
+    const planeHeight = planeGeometry.parameters.height;
+
+    // Set oRes to the physical plane size
+    this.uniforms.oRes.value.set(planeWidth, planeHeight);
+
+    // Calculate focal length f2 from camera FOV and plane size
+    // Formula: f2 = (planeHeight / 2) / tan(fov / 2)
+    if ((camera as THREE.PerspectiveCamera).fov) {
+      const fovRadians = THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov);
+      this.uniforms.f2.value = (planeHeight / 2) / Math.tan(fovRadians / 2);
+    } else {
+      // Fallback if not a perspective camera
+      this.uniforms.f2.value = this.planeDistance;
     }
+
+    // Calculate slant (sl) from camera's forward direction
+    const forward = new THREE.Vector3(0, 0, -1);
+    forward.applyQuaternion(camera.quaternion);
+
+    // Slant is the XY components of the forward direction
+    // Normalized so that the Z component becomes 1 in the rotation matrix
+    // Negated to match shader convention
+    const sl_x = -forward.x / forward.z;
+    const sl_y = -forward.y / forward.z;
+    this.uniforms.sl2.value.set(sl_x, sl_y);
+
+    // No skew (camera is on-axis with plane)
+    this.uniforms.sk2.value.set(0, 0);
+
+    // Calculate roll from camera's up vector
+    // TODO: Implement roll calculation from camera.quaternion
+    this.uniforms.roll2.value = 0;
 
     // Update time for animations
     this.uniforms.uTime.value = performance.now() / 1000;
-
-    // Camera transforms (for now, use defaults)
-    this.uniforms.sk2.value.set(0, 0);
-    this.uniforms.sl2.value.set(0, 0);
-    this.uniforms.roll2.value = 0;
   }
 
   /**
-   * Position the plane at the correct distance from projector and make it face the camera
+   * Position the plane at fixed distance from camera, perpendicular to camera Z axis
+   * The plane follows the camera and always faces it
    */
   public updatePlaneTransform(camera: THREE.Camera): void {
     if (!this.projector) return;
 
-    // Position plane in front of projector
-    this.position.copy(this.projector.position);
-    this.position.z += this.planeDistance;
+    // Get camera forward direction
+    const forward = new THREE.Vector3(0, 0, -1);
+    forward.applyQuaternion(camera.quaternion);
 
-    // Make plane face the camera
-    this.lookAt(camera.position);
+    // Position plane at distance along camera's forward direction
+    this.position.copy(camera.position);
+    this.position.addScaledVector(forward, this.planeDistance);
+
+    // Make plane face the camera (perpendicular to camera Z axis)
+    this.quaternion.copy(camera.quaternion);
   }
 
   /**

@@ -193,6 +193,17 @@ export async function createHoloProjectorFromLifView(
   projector.quaternion.copy(quaternion);
   console.log('Set quaternion:', projector.quaternion);
 
+  // Handle multi-layer LDI if present
+  await projector.initialized; // Wait for main layer to load
+
+  console.log('createHoloProjectorFromLifView - checking for layers_top_to_bottom:', view.layers_top_to_bottom);
+  if (view.layers_top_to_bottom && view.layers_top_to_bottom.length > 0) {
+    console.log(`Found ${view.layers_top_to_bottom.length} layers in layers_top_to_bottom`);
+    projector.populateLifLayersFromView(view);
+  } else {
+    console.log('No layers_top_to_bottom found, using single layer');
+  }
+
   return projector;
 }
 

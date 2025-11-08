@@ -40,6 +40,13 @@
     <span id="controls"></span>
   </div>
 
+  <div id="texture-debug" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.95); padding: 20px; border-radius: 10px; z-index: 200; display: none; max-width: 90vw; max-height: 90vh; overflow-y: auto; overflow-x: hidden;">
+    <div style="position: sticky; top: 0; background: rgba(0, 0, 0, 0.95); padding-bottom: 10px; z-index: 1; text-align: right; margin-bottom: 10px;">
+      <button id="close-texture-debug" style="background: #ff4444; color: white; border: none; padding: 5px 15px; border-radius: 5px; cursor: pointer;">Close (X)</button>
+    </div>
+    <div id="texture-debug-content" style="color: white; font-family: monospace; font-size: 12px;"></div>
+  </div>
+
   <div id="lif-loader" style="position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.7); padding: 15px; border-radius: 5px; color: white; font-family: monospace; z-index: 100; max-width: 300px;">
     <div style="margin-bottom: 8px;">Load LIF File:</div>
     <input type="file" id="lif-file-input" accept=".lif,.jpg,.jpeg,image/jpeg" style="width: 200px;">
@@ -55,16 +62,26 @@
     </div>
 
     <div id="view-info" style="margin-top: 15px; font-size: 11px; line-height: 1.4; border-top: 1px solid #555; padding-top: 10px; display: none;">
-      <div style="font-weight: bold; margin-bottom: 5px;">View Info:</div>
+      <div style="font-weight: bold; margin-bottom: 5px;">Projector Pose:</div>
       <div>Pos: <span id="view-pos">-</span></div>
       <div>Rot: <span id="view-rot">-</span></div>
-      <div style="margin-top: 5px;">fx: <span id="view-fx">-</span></div>
-      <div>fy: <span id="view-fy">-</span></div>
-      <div>cx: <span id="view-cx">-</span></div>
-      <div>cy: <span id="view-cy">-</span></div>
-      <div style="margin-top: 5px;">invZ min: <span id="view-invz-min">-</span></div>
+
+      <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Main View:</div>
+      <div>Size: <span id="main-width">-</span> × <span id="main-height">-</span> px</div>
+      <div>Focal: <span id="main-focal">-</span> px</div>
+      <div>f1/width: <span id="main-focal-ratio">-</span></div>
+
+      <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Layer 0:</div>
+      <div>Size: <span id="layer0-width">-</span> × <span id="layer0-height">-</span> px</div>
+      <div>Focal: <span id="layer0-focal">-</span> px</div>
+
+      <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Render Camera:</div>
+      <div>f2/planeWidth: <span id="camera-focal-ratio">-</span></div>
+
+      <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Depth Range:</div>
+      <div>invZ min: <span id="view-invz-min">-</span></div>
       <div>invZ max: <span id="view-invz-max">-</span></div>
-      <div>baseline: <span id="view-baseline">-</span>m</div>
+      <div>baseline: <span id="view-baseline">-</span> mm</div>
     </div>
   </div>
 
@@ -152,6 +169,195 @@
       return renderer;
     }
 
+    // Function to show texture debug view
+    function showTextureDebug() {
+      const debugPanel = document.getElementById('texture-debug');
+      const content = document.getElementById('texture-debug-content');
+
+      if (!projector) {
+        content.innerHTML = '<div style="color: #ff4444;">No projector loaded</div>';
+        debugPanel.style.display = 'block';
+        return;
+      }
+
+      console.log('Texture Debug - Projector:', projector);
+      console.log('RGB Texture:', projector.rgbTexture, 'has image:', !!projector.rgbTexture?.image);
+      console.log('Depth Texture:', projector.depthTexture, 'has image:', !!projector.depthTexture?.image);
+      console.log('lifLayers count:', projector.lifLayers?.length);
+      console.log('lifLayers detail:', projector.lifLayers);
+
+      // Check each layer
+      projector.lifLayers?.forEach((layer, i) => {
+        console.log(`Layer ${i}:`, {
+          rgbUrl: layer.rgbUrl,
+          depthUrl: layer.depthUrl,
+          maskUrl: layer.maskUrl,
+          width: layer.width,
+          height: layer.height,
+          hasRgbTexture: !!layer.rgbTexture,
+          hasDepthTexture: !!layer.depthTexture
+        });
+      });
+
+      let html = '<div style="margin-bottom: 20px;">';
+      html += `<h3 style="margin: 0 0 15px 0; color: #4CAF50;">Current View Textures</h3>`;
+      html += `<div style="margin-bottom: 5px;">Dimensions: ${projector.width}x${projector.height}</div>`;
+      html += `<div style="margin-bottom: 15px;">Layers: ${projector.lifLayers.length}</div>`;
+
+      // First row: Main RGB and Depth
+      html += '<div style="margin-bottom: 20px; border-bottom: 2px solid #666; padding-bottom: 15px;">';
+      html += '<div style="margin-bottom: 10px; font-weight: bold; color: #FFD700;">Main View:</div>';
+      html += '<div style="display: flex; gap: 10px; flex-wrap: wrap;">';
+
+      // Main RGB - use image.src if available
+      if (projector.rgbTexture && projector.rgbTexture.image) {
+        const imgSrc = projector.rgbTexture.image.src || projector.rgbTexture.image.currentSrc;
+        if (imgSrc) {
+          html += `<div style="text-align: center;">
+            <div style="margin-bottom: 5px; font-size: 11px;">RGB</div>
+            <img src="${imgSrc}" style="max-width: 200px; max-height: 150px; border: 1px solid #666;" />
+          </div>`;
+        } else {
+          html += `<div style="text-align: center; width: 200px;">
+            <div style="margin-bottom: 5px; font-size: 11px;">RGB</div>
+            <div style="width: 200px; height: 150px; border: 1px solid #ff4444; display: flex; align-items: center; justify-content: center; color: #ff4444;">No src</div>
+          </div>`;
+        }
+      } else {
+        html += `<div style="text-align: center; width: 200px;">
+          <div style="margin-bottom: 5px; font-size: 11px;">RGB</div>
+          <div style="width: 200px; height: 150px; border: 1px solid #666; display: flex; align-items: center; justify-content: center; color: #666;">No texture</div>
+        </div>`;
+      }
+
+      // Main Depth - use image.src if available
+      if (projector.depthTexture && projector.depthTexture.image) {
+        const imgSrc = projector.depthTexture.image.src || projector.depthTexture.image.currentSrc;
+        if (imgSrc) {
+          html += `<div style="text-align: center;">
+            <div style="margin-bottom: 5px; font-size: 11px;">Depth</div>
+            <img src="${imgSrc}" style="max-width: 200px; max-height: 150px; border: 1px solid #666;" />
+          </div>`;
+        } else {
+          html += `<div style="text-align: center; width: 200px;">
+            <div style="margin-bottom: 5px; font-size: 11px;">Depth</div>
+            <div style="width: 200px; height: 150px; border: 1px solid #ff4444; display: flex; align-items: center; justify-content: center; color: #ff4444;">No src</div>
+          </div>`;
+        }
+      } else {
+        html += `<div style="text-align: center; width: 200px;">
+          <div style="margin-bottom: 5px; font-size: 11px;">Depth</div>
+          <div style="width: 200px; height: 150px; border: 1px solid #666; display: flex; align-items: center; justify-content: center; color: #666;">No texture</div>
+        </div>`;
+      }
+
+      html += '</div></div>';
+
+      // Subsequent rows: Layers
+      projector.lifLayers.forEach((layer, index) => {
+        html += `<div style="margin-bottom: 20px; ${index < projector.lifLayers.length - 1 ? 'border-bottom: 1px solid #444;' : ''} padding-bottom: 15px;">`;
+        html += `<div style="margin-bottom: 10px; font-weight: bold; color: #4FC3F7;">Layer ${index}:</div>`;
+        html += `<div style="margin-bottom: 5px; font-size: 10px; color: #aaa;">${layer.width}x${layer.height}</div>`;
+        html += '<div style="display: flex; gap: 10px; align-items: flex-start;">';
+
+        // Layer RGB
+        if (layer.rgbUrl) {
+          html += `<div style="text-align: center; flex-shrink: 0;">
+            <div style="margin-bottom: 5px; font-size: 11px;">RGB</div>
+            <img src="${layer.rgbUrl}" style="max-width: 200px; max-height: 150px; border: 1px solid #666;" />
+          </div>`;
+        } else if (layer.rgbTexture && layer.rgbTexture.image) {
+          const canvas = createTextureCanvas(layer.rgbTexture, 'RGB');
+          html += `<div style="text-align: center; flex-shrink: 0;">
+            <div style="margin-bottom: 5px; font-size: 11px;">RGB</div>
+            ${canvas.outerHTML}
+          </div>`;
+        } else {
+          html += `<div style="text-align: center; flex-shrink: 0; width: 200px;">
+            <div style="margin-bottom: 5px; font-size: 11px;">RGB</div>
+            <div style="width: 200px; height: 150px; border: 1px solid #666; display: flex; align-items: center; justify-content: center; color: #666;">No RGB</div>
+          </div>`;
+        }
+
+        // Layer Depth
+        if (layer.depthUrl) {
+          html += `<div style="text-align: center; flex-shrink: 0;">
+            <div style="margin-bottom: 5px; font-size: 11px;">Depth</div>
+            <img src="${layer.depthUrl}" style="max-width: 200px; max-height: 150px; border: 1px solid #666;" />
+          </div>`;
+        } else if (layer.depthTexture && layer.depthTexture.image) {
+          const canvas = createTextureCanvas(layer.depthTexture, 'Depth');
+          html += `<div style="text-align: center; flex-shrink: 0;">
+            <div style="margin-bottom: 5px; font-size: 11px;">Depth</div>
+            ${canvas.outerHTML}
+          </div>`;
+        } else {
+          html += `<div style="text-align: center; flex-shrink: 0; width: 200px;">
+            <div style="margin-bottom: 5px; font-size: 11px;">Depth</div>
+            <div style="width: 200px; height: 150px; border: 1px solid #666; display: flex; align-items: center; justify-content: center; color: #666;">No Depth</div>
+          </div>`;
+        }
+
+        // Layer Mask
+        if (layer.maskUrl) {
+          html += `<div style="text-align: center; flex-shrink: 0;">
+            <div style="margin-bottom: 5px; font-size: 11px;">Mask</div>
+            <img src="${layer.maskUrl}" style="max-width: 200px; max-height: 150px; border: 1px solid #666;" />
+          </div>`;
+        } else {
+          html += `<div style="text-align: center; flex-shrink: 0; width: 200px;">
+            <div style="margin-bottom: 5px; font-size: 11px;">Mask</div>
+            <div style="width: 200px; height: 150px; border: 1px solid #666; display: flex; align-items: center; justify-content: center; color: #666;">No Mask</div>
+          </div>`;
+        }
+
+        html += '</div></div>';
+      });
+
+      html += '</div>';
+      content.innerHTML = html;
+      debugPanel.style.display = 'block';
+    }
+
+    // Helper to create a canvas from a THREE.Texture
+    function createTextureCanvas(texture, label) {
+      const canvas = document.createElement('canvas');
+      const maxSize = 200;
+
+      if (!texture.image) {
+        console.error('Texture has no image:', label, texture);
+        canvas.width = maxSize;
+        canvas.height = maxSize;
+        canvas.style.border = '1px solid #ff0000';
+        return canvas;
+      }
+
+      const aspectRatio = texture.image.width / texture.image.height;
+
+      if (aspectRatio > 1) {
+        canvas.width = maxSize;
+        canvas.height = maxSize / aspectRatio;
+      } else {
+        canvas.width = maxSize * aspectRatio;
+        canvas.height = maxSize;
+      }
+
+      const ctx = canvas.getContext('2d');
+      try {
+        ctx.drawImage(texture.image, 0, 0, canvas.width, canvas.height);
+      } catch (e) {
+        console.error('Failed to draw texture:', label, e, texture);
+      }
+      canvas.style.border = '1px solid #666';
+
+      return canvas;
+    }
+
+    // Close button handler
+    document.getElementById('close-texture-debug').addEventListener('click', () => {
+      document.getElementById('texture-debug').style.display = 'none';
+    });
+
     // Camera controls
     const moveState = {
       forward: false,
@@ -232,9 +438,10 @@
             'Double Click: Orbit point<br>' +
             viewNavigation +
             'R: Reset view<br>' +
-            'M: Toggle mesh mode<br>' +
+            'L: Toggle LDI mode<br>' +
             'V: Toggle depth view<br>' +
             'G: Toggle gradient filter<br>' +
+            'X: Show textures<br>' +
             'F: Toggle frustum';
         }
       } else if (mode === 'orbit') {
@@ -318,13 +525,8 @@
           }
           break;
         case 'KeyM':
-          // Cycle mesh mode
-          const holoRenderer = findHoloRenderer();
-          if (holoRenderer) {
-            const meshMode = holoRenderer.cycleMeshMode();
-            const modeNames = ['Billboard', 'Connected Mesh'];
-            console.log('Mesh mode:', modeNames[meshMode]);
-          }
+          // Legacy: 'M' key now does nothing (use 'L' for LDI mode toggle)
+          console.log("'M' key is no longer used. Press 'L' to toggle LDI mode.");
           break;
         case 'KeyG':
           // Toggle gradient filter
@@ -357,6 +559,25 @@
           if (holoRenderer3) {
             const showDepth = holoRenderer3.toggleDepthVisualization();
             console.log('Depth visualization:', showDepth ? 'ON (show depth)' : 'OFF (show RGB)');
+          }
+          break;
+        case 'KeyL':
+          // Toggle LDI mode (mesh vs raytracing)
+          const holoRenderer4 = findHoloRenderer();
+          if (holoRenderer4) {
+            const currentMode = holoRenderer4.getRenderMode();
+            const newMode = currentMode === 'mesh' ? 'raytracing' : 'mesh';
+            holoRenderer4.setRenderMode(newMode);
+            console.log('Render mode:', newMode.toUpperCase());
+          }
+          break;
+        case 'KeyX':
+          // Toggle texture debug view
+          const debugPanel = document.getElementById('texture-debug');
+          if (debugPanel.style.display === 'none') {
+            showTextureDebug();
+          } else {
+            debugPanel.style.display = 'none';
           }
           break;
         case 'KeyO':
@@ -414,7 +635,7 @@
       const holoRenderer = findHoloRenderer();
       if (holoRenderer) {
         holoRenderer.setGradientThreshold(initialThreshold);
-        holoRenderer.setMeshMode(1); // Start in mesh mode
+        // Renderer starts in mesh mode by default
       }
     }, 100);
 
@@ -943,6 +1164,9 @@
         // Store all loaded projectors
         loadedProjectors = result.projectors;
 
+        // Store stereo_render_data globally for RaycastPlane
+        window.lifStereoRenderData = result.stereo_render_data;
+
         // Calculate orbit centers for all views if stereo_render_data exists
         viewOrbitCenters = new Array(result.projectors.length).fill(null);
 
@@ -1093,21 +1317,42 @@
         // Helper function to update view info display
         function updateViewInfo(proj) {
           document.getElementById('view-info').style.display = 'block';
+
+          // Projector Pose
           document.getElementById('view-pos').textContent =
             `(${proj.position.x.toFixed(4)}, ${proj.position.y.toFixed(4)}, ${proj.position.z.toFixed(4)})`;
-
-          // Format quaternion
           const quat = proj.quaternion;
           document.getElementById('view-rot').textContent =
             `(${quat.x.toFixed(3)}, ${quat.y.toFixed(3)}, ${quat.z.toFixed(3)}, ${quat.w.toFixed(3)})`;
 
-          document.getElementById('view-fx').textContent = proj.intrinsics.fx.toFixed(2);
-          document.getElementById('view-fy').textContent = proj.intrinsics.fy.toFixed(2);
-          document.getElementById('view-cx').textContent = proj.intrinsics.cx.toFixed(2);
-          document.getElementById('view-cy').textContent = proj.intrinsics.cy.toFixed(2);
+          // Main View (projector's main intrinsics)
+          document.getElementById('main-width').textContent = proj.width;
+          document.getElementById('main-height').textContent = proj.height;
+          const mainFocal = proj.intrinsics.fx;
+          document.getElementById('main-focal').textContent = mainFocal.toFixed(2);
+          const mainFocalRatio = mainFocal / proj.width;
+          document.getElementById('main-focal-ratio').textContent = mainFocalRatio.toFixed(4);
+
+          // Layer 0 (if available)
+          if (proj.lifLayers && proj.lifLayers.length > 0) {
+            const layer0 = proj.lifLayers[0];
+            document.getElementById('layer0-width').textContent = layer0.width;
+            document.getElementById('layer0-height').textContent = layer0.height;
+            document.getElementById('layer0-focal').textContent = layer0.intrinsics.fx.toFixed(2);
+          } else {
+            document.getElementById('layer0-width').textContent = '-';
+            document.getElementById('layer0-height').textContent = '-';
+            document.getElementById('layer0-focal').textContent = '-';
+          }
+
+          // Render Camera (will be updated in animation loop)
+          document.getElementById('camera-focal-ratio').textContent = '-';
+
+          // Depth Range (using main view invDepthRange)
           document.getElementById('view-invz-min').textContent = proj.invDepthRange.min.toFixed(6);
           document.getElementById('view-invz-max').textContent = proj.invDepthRange.max.toFixed(6);
-          document.getElementById('view-baseline').textContent = (proj.invDepthRange.baseline || 1.0).toFixed(4);
+          const baseline_mm = (proj.invDepthRange.baseline || 1.0) * 1000; // Convert to mm
+          document.getElementById('view-baseline').textContent = baseline_mm.toFixed(2);
         }
 
         // Update view info for first view
@@ -1204,6 +1449,20 @@
         const pos = camera.position;
         document.getElementById('camera-pos').textContent =
           `(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`;
+
+        // Update camera focal ratio (f2 / planeWidth)
+        // Get RaycastPlane from projector to read uniforms
+        if (projector && projector.children) {
+          const raycastPlane = projector.children.find(child => child.constructor.name === 'RaycastPlane');
+          if (raycastPlane && raycastPlane.uniforms) {
+            const f2 = raycastPlane.uniforms.f2.value;
+            const planeWidth = raycastPlane.uniforms.oRes.value.x;
+            if (planeWidth > 0) {
+              const cameraFocalRatio = f2 / planeWidth;
+              document.getElementById('camera-focal-ratio').textContent = cameraFocalRatio.toFixed(4);
+            }
+          }
+        }
       }
 
       // Camera animation

@@ -22,222 +22,43 @@
   - Dynamic uniform updates for camera-dependent rendering
   - Proper cleanup/dispose methods
 
+### Phase 4: HoloRenderer Modifications
+- ✅ Removed all point/billboard rendering code
+- ✅ Added `RenderMode` type ('mesh' | 'raytracing')
+- ✅ Added `raycastPlane` property for raytracing mode
+- ✅ Implemented mode switching (`setRenderMode`/`getRenderMode`)
+- ✅ Added `renderMeshLayer` and `renderRaycastLayer` methods
+- ✅ Proper cleanup in `dispose()`
+
+### Phase 5: HoloLayerGroup Class
+- ✅ Created `src/HoloLayerGroup.ts` with:
+  - Automatic mode detection (single layer → mesh, multi-layer → raytracing)
+  - Per-layer HoloRenderer management
+  - Mode switching for all layers
+  - Statistics and utility methods
+
+### Phase 6: Type Definitions
+- ✅ Added `LayerData` interface to `src/types/lif.d.ts`
+- ✅ Added `lifLayers: LayerData[]` property to HoloProjector
+- ✅ Properly typed all layer-related methods
+
+### Phase 7: Exports
+- ✅ Exported `HoloLayerGroup` from `src/index.ts`
+- ✅ Exported `RaycastPlane` from `src/index.ts`
+- ✅ Exported `RenderMode` type from `src/index.ts`
+
+### Phase 8: HoloProjector lifLayers Population
+- ✅ Added `populateLifLayers()` method for single-layer initialization
+- ✅ Integrated into constructor for both URL and direct texture loading
+- ✅ Added `populateLifLayersFromView()` for multi-layer LDI support
+- ✅ Integrated into `fromLifView()` static method
+- ✅ Handles `layers_top_to_bottom` from LifView
+
 ---
 
 ## Remaining Tasks 🚧
 
-### Phase 4: Modify HoloRenderer (CRITICAL)
-
-**File**: `src/HoloRenderer.ts`
-
-**Changes Needed**:
-
-1. **Remove Point Rendering Mode**
-   - Delete: `pointSize` property
-   - Delete: `maxStdDev` property
-   - Delete: Billboard/instanced geometry code (mode 0)
-   - Delete: `setMeshMode(0)` option
-   - Keep ONLY connected mesh mode (current mode 1)
-
-2. **Add Render Mode Property**
-   ```typescript
-   export type RenderMode = 'mesh' | 'raytracing';
-
-   export class HoloRenderer extends THREE.Mesh {
-     private renderMode: RenderMode;
-     private raycastPlane: RaycastPlane | null = null;
-     // ... existing properties
-   }
-   ```
-
-3. **Update Constructor**
-   ```typescript
-   export type HoloRendererOptions = {
-     renderer: THREE.WebGLRenderer;
-     depthWrite?: boolean;
-     renderMode?: RenderMode; // New option
-   };
-
-   constructor(optionsOrRenderMode?: HoloRendererOptions | RenderMode) {
-     // Support both old API and new API
-     let options: HoloRendererOptions;
-     if (typeof optionsOrRenderMode === 'string') {
-       options = { renderMode: optionsOrRenderMode };
-     } else {
-       options = optionsOrRenderMode ?? {};
-     }
-
-     // Auto-detect mode based on layer count
-     this.renderMode = options.renderMode ?? 'mesh';
-     // ...
-   }
-   ```
-
-4. **Modify onBeforeRender**
-   ```typescript
-   onBeforeRender(renderer, scene, camera) {
-     // Single-layer mode with assigned layer
-     if (this.assignedLayer && this.assignedProjector) {
-       if (this.renderMode === 'mesh') {
-         this.renderMeshLayer(camera, renderer);
-       } else {
-         this.renderRaycastPlane(camera, renderer);
-       }
-       return;
-     }
-
-     // Legacy mode (scan for projectors)
-     // ... existing code
-   }
-   ```
-
-5. **Add Raycast Rendering Method**
-   ```typescript
-   private async renderRaycastPlane(camera, renderer) {
-     if (!this.raycastPlane && this.assignedProjector) {
-       // Create plane on first render
-       this.raycastPlane = new RaycastPlane(
-         this.assignedLayer.width / 100,  // Scale to reasonable size
-         this.assignedLayer.height / 100
-       );
-       await this.raycastPlane.initializeFromProjector(this.assignedProjector);
-       this.add(this.raycastPlane); // Add as child
-     }
-
-     if (this.raycastPlane) {
-       this.raycastPlane.updateDynamicUniforms(camera, renderer);
-       this.raycastPlane.updatePlaneTransform(camera);
-     }
-   }
-   ```
-
-6. **Add Mode Switching**
-   ```typescript
-   public setRenderMode(mode: RenderMode): void {
-     if (this.renderMode === mode) return;
-
-     this.renderMode = mode;
-
-     // Clean up old mode
-     if (mode === 'mesh' && this.raycastPlane) {
-       this.raycastPlane.dispose();
-       this.remove(this.raycastPlane);
-       this.raycastPlane = null;
-     }
-
-     if (mode === 'raytracing' && this.connectedMeshGeometry) {
-       // Hide mesh geometry
-       this.geometry = new THREE.BufferGeometry();
-     }
-   }
-
-   public getRenderMode(): RenderMode {
-     return this.renderMode;
-   }
-   ```
-
-7. **Cleanup in dispose()**
-   ```typescript
-   dispose(): void {
-     if (this.raycastPlane) {
-       this.raycastPlane.dispose();
-       this.raycastPlane = null;
-     }
-     // ... existing cleanup
-   }
-   ```
-
----
-
-### Phase 5: Update HoloLayerGroup
-
-**File**: `src/HoloLayerGroup.ts`
-
-**Changes Needed**:
-
-1. **Add Mode Detection**
-   ```typescript
-   public initializeFromProjector(projector: HoloProjector): void {
-     this.dispose();
-     this.projector = projector;
-
-     // Auto-detect mode: raytracing if > 1 layer, mesh otherwise
-     const renderMode = projector.lifLayers.length > 1 ? 'raytracing' : 'mesh';
-
-     for (let i = 0; i < projector.lifLayers.length; i++) {
-       const renderer = new HoloRenderer(renderMode);
-       // ... existing setup
-     }
-   }
-   ```
-
-2. **Add Mode Control Methods**
-   ```typescript
-   public setRenderMode(mode: RenderMode): void {
-     this.layerRenderers.forEach(r => r.setRenderMode(mode));
-   }
-
-   public getRenderMode(): RenderMode {
-     return this.layerRenderers[0]?.getRenderMode() ?? 'mesh';
-   }
-   ```
-
----
-
-### Phase 6: Type Definitions
-
-**File**: `src/types/lif.d.ts`
-
-**Changes Needed**:
-
-1. **Add stereo_render_data to LifView**
-   ```typescript
-   export interface LifView {
-     // ... existing fields
-
-     // Stereo rendering data (optional)
-     stereo_render_data?: {
-       invd?: number;
-       inv_convergence_distance?: number;
-       frustum_skew?: { x: number; y: number };
-     };
-   }
-   ```
-
-2. **Extend LayerData**
-   ```typescript
-   export interface LayerData {
-     // ... existing fields
-
-     // Raytracing-specific textures (loaded on demand)
-     raycastTextures?: {
-       rgbTexture: THREE.Texture;
-       depthMaskTexture: THREE.Texture;
-     };
-   }
-   ```
-
----
-
-### Phase 7: Export New Classes
-
-**File**: `src/index.ts`
-
-**Changes Needed**:
-
-```typescript
-export { HoloProjector } from "./HoloProjector";
-export { HoloRenderer } from "./HoloRenderer";
-export { HoloLayerGroup } from "./HoloLayerGroup";
-export { RaycastPlane } from "./RaycastPlane";  // NEW
-export type { HoloProjectorOptions } from "./HoloProjector";
-export type { HoloRendererOptions } from "./HoloRenderer";
-export type { RenderMode } from "./HoloRenderer";  // NEW
-```
-
----
-
-### Phase 8: Demo Updates
+### Phase 9: Testing & Demo Updates
 
 **File**: `index.html`
 
