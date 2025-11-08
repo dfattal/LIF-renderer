@@ -22,6 +22,7 @@ uniform int uNumLayers;
 
 // info rendering params
 uniform vec3 uFacePosition; // in normalized camera space
+uniform mat3 uFaceRotation; // Camera rotation matrix
 uniform vec2 sk2, sl2;
 uniform float roll2, f2; // f2 in px
 uniform vec2 oRes; // viewport resolution in px
@@ -84,6 +85,8 @@ mat3 matFromFocal(vec2 fxy) {
     // includes correction for aspect ratio since f expressed in fraction image width
     return mat3(fxy.x, 0.0, 0.0, 0.0, fxy.y, 0.0, 0.0, 0.0, 1.0);
 }
+
+mat3 flipZ = mat3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0); // flip Z axis
 
 #ifdef GL_ES
 // Matrix Math
@@ -218,7 +221,8 @@ void main(void) {
         mat3 SKR1 = matFromSkew(sk1) * matFromRoll(roll1) * matFromSlant(sl1); // Notice the focal part is missing, changes per layer
 
         vec3 C2 = uFacePosition;
-        mat3 FSKR2 = matFromFocal(vec2(f2 / oRes.x, f2 / oRes.y)) * matFromSkew(sk2) * matFromRoll(roll2) * matFromSlant(sl2);
+        // Use rotation matrix directly instead of decomposed roll/slant
+        mat3 FSKR2 = matFromFocal(vec2(f2 / oRes.x, f2 / oRes.y)) * flipZ * transpose_m(uFaceRotation) * flipZ;
         float invZ, confidence;
 
         // LDI

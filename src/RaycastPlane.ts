@@ -67,6 +67,7 @@ export class RaycastPlane extends THREE.Mesh {
 
       // Rendering camera (where we're viewing from)
       uFacePosition: { value: new THREE.Vector3(0, 0, 0) },
+      uFaceRotation: { value: new THREE.Matrix3() }, // Camera rotation matrix
       sk2: { value: new THREE.Vector2(0, 0) },
       sl2: { value: new THREE.Vector2(0, 0) },
       roll2: { value: 0.0 },
@@ -199,6 +200,10 @@ export class RaycastPlane extends THREE.Mesh {
           rgb: rgbTexture,
           depthMask: depthMaskTexture,
         });
+
+        // Also set textures on the layer object for raycasting
+        layer.rgbTexture = rgbTexture;
+        layer.depthTexture = depthMaskTexture; // Store combined depth+mask texture
 
         console.log(`Layer ${i} textures loaded: ${layer.width}x${layer.height}`);
       } catch (error) {
@@ -467,22 +472,19 @@ export class RaycastPlane extends THREE.Mesh {
       this.uniforms.f2.value = this.planeDistance;
     }
 
-    // Calculate slant (sl) from camera's forward direction
-    const forward = new THREE.Vector3(0, 0, -1);
-    forward.applyQuaternion(camera.quaternion);
+    // Pass camera rotation matrix directly to shader
+    // Get the full rotation matrix from camera quaternion
+    const cameraMatrix = new THREE.Matrix4();
+    cameraMatrix.makeRotationFromQuaternion(camera.quaternion);
+    const R = new THREE.Matrix3().setFromMatrix4(cameraMatrix);
 
-    // Slant is the XY components of the forward direction
-    // Normalized so that the Z component becomes 1 in the rotation matrix
-    // Negated to match shader convention
-    const sl_x = -forward.x / forward.z;
-    const sl_y = -forward.y / forward.z;
-    this.uniforms.sl2.value.set(sl_x, sl_y);
+    // Both THREE.js Matrix3 and GLSL mat3 are column-major, so direct copy works
+    // THREE.js will upload the matrix elements in the correct order for GLSL
+    this.uniforms.uFaceRotation.value.copy(R);
 
-    // No skew (camera is on-axis with plane)
+    // Still set legacy uniforms for compatibility (though shader now uses uFaceRotation)
     this.uniforms.sk2.value.set(0, 0);
-
-    // Calculate roll from camera's up vector
-    // TODO: Implement roll calculation from camera.quaternion
+    this.uniforms.sl2.value.set(0, 0);
     this.uniforms.roll2.value = 0;
 
     // Update time for animations

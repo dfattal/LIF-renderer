@@ -93,6 +93,44 @@ public/assets/         # Sample RGB+Depth data (SFMoMA restaurant)
 - `max`: Inverse depth of furthest point (e.g., 0.0001 = 1/10000m)
 - `baseline`: Stereo baseline in meters (optional, default 1.0)
 
+### Matrix Conversion: THREE.js to GLSL Shaders
+
+When passing rotation matrices from THREE.js to GLSL shaders, two critical transformations are required:
+
+**1. Transpose for Convention Conversion**
+- THREE.js uses **row-vector convention**: `v_row × M`
+- GLSL uses **column-vector convention**: `M × v_col`
+- **Solution**: Transpose the matrix: `transpose(M_threejs)` before use in shader
+
+**2. Coordinate System Conversion (Z-axis flip)**
+- THREE.js camera looks down **-Z axis** (right-handed, Y-up)
+- Shader raycast expects camera looking down **+Z axis**
+- **Solution**: Apply similarity transform with Z-flip matrix
+
+**Complete Transformation in Shader:**
+```glsl
+mat3 flipZ = mat3(1.0, 0.0, 0.0,
+                  0.0, 1.0, 0.0,
+                  0.0, 0.0, -1.0);
+
+mat3 shaderRotation = flipZ * transpose(threeJsRotation) * flipZ;
+```
+
+**Why this works:**
+- The transpose converts from row-vector to column-vector convention
+- The `flipZ * R * flipZ` similarity transform converts the rotation between coordinate systems with opposite Z-axis directions
+- Since `flipZ` is its own inverse (flipping twice = identity), this is mathematically equivalent to `S × R × S^(-1)`
+
+**Example (RaycastPlane.ts → rayCastMonoLDI.glsl):**
+```typescript
+// TypeScript: Pass rotation matrix as-is
+this.uniforms.uFaceRotation.value.copy(cameraRotationMatrix);
+```
+```glsl
+// GLSL: Apply both transformations
+mat3 FSKR2 = matFromFocal(...) * flipZ * transpose_m(uFaceRotation) * flipZ;
+```
+
 ### Auto-Injection
 When a HoloProjector is added to a scene:
 1. Detection mesh (empty geometry) is created as child

@@ -30,6 +30,8 @@
     Points: <span id="point-count">0</span><br>
     Mode: <span id="mode">Free Camera</span><br>
     <span id="camera-pos">(0.000, 0.000, 0.000)</span><br>
+    Slant: <span id="camera-slant">(0.000, 0.000)</span><br>
+    Roll: <span id="camera-roll">0.0</span>°<br>
     <div style="margin-top: 10px;">
       Gradient Filter: <span id="gradient-enabled">ON</span><br>
       <div id="gradient-threshold-container">
@@ -664,20 +666,37 @@
       raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
       const ray = raycaster.ray;
 
-      // Get projector transform
-      projector.updateMatrixWorld();
-      const projectorMatrixInv = projector.matrixWorld.clone().invert();
+      // Get the active projector (could be from scene or loadedProjectors)
+      const activeProjector = projector || (loadedProjectors.length > 0 ? loadedProjectors[0] : null);
+      if (!activeProjector) {
+        console.warn('No projector available for raycasting');
+        return null;
+      }
 
-      // Get depth texture data
-      const depthTexture = projector.depthTexture;
+      // Use first layer's data for raycasting
+      const layer = activeProjector.lifLayers && activeProjector.lifLayers.length > 0
+        ? activeProjector.lifLayers[0]
+        : null;
+
+      if (!layer) {
+        console.warn('No layer data available for raycasting');
+        return null;
+      }
+
+      // Get projector transform
+      activeProjector.updateMatrixWorld();
+      const projectorMatrixInv = activeProjector.matrixWorld.clone().invert();
+
+      // Get depth texture data from layer (fallback to projector's main texture if not available)
+      const depthTexture = layer.depthTexture || activeProjector.depthTexture;
       if (!depthTexture || !depthTexture.image) {
         console.warn('Depth texture not loaded');
         return null;
       }
 
-      // Use projector's actual dimensions, not global width/height
-      const imgWidth = projector.width;
-      const imgHeight = projector.height;
+      // Use layer's actual dimensions
+      const imgWidth = layer.width;
+      const imgHeight = layer.height;
 
       // Create temporary canvas to read depth texture
       const canvas = document.createElement('canvas');
@@ -687,21 +706,25 @@
       ctx.drawImage(depthTexture.image, 0, 0);
       const imageData = ctx.getImageData(0, 0, imgWidth, imgHeight);
 
-      const invZMin = projector.invDepthRange.min;
-      const invZMax = projector.invDepthRange.max;
-      const baseline = projector.invDepthRange.baseline || 1.0;
-      const fx = projector.intrinsics.fx;
-      const fy = projector.intrinsics.fy;
-      const cx = projector.intrinsics.cx;
-      const cy = projector.intrinsics.cy;
+      const invZMin = layer.invDepthRange.min;
+      const invZMax = layer.invDepthRange.max;
+      const baseline = layer.invDepthRange.baseline || 1.0;
+      const fx = layer.intrinsics.fx;
+      const fy = layer.intrinsics.fy;
+      const cx = layer.intrinsics.cx;
+      const cy = layer.intrinsics.cy;
 
       // Helper function to sample depth map at pixel coordinates
-      // Note: Y-flip handling - THREE.js textures have flipY=true by default
+      // Note: Y-flip handling depends on texture type
+      // TextureLoader textures have flipY=true, CanvasTexture have flipY=false
       function sampleDepthMap(px, py) {
         if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) return null;
-        // Flip Y coordinate to match texture coordinate system
-        const pyFlipped = (imgHeight - 1) - Math.floor(py);
-        const idx = (pyFlipped * imgWidth + Math.floor(px)) * 4;
+
+        // Check if texture needs Y-flip (TextureLoader has flipY=true, CanvasTexture has flipY=false)
+        const needsFlip = !(depthTexture instanceof THREE.CanvasTexture);
+        const pyToUse = needsFlip ? (imgHeight - 1) - Math.floor(py) : Math.floor(py);
+
+        const idx = (pyToUse * imgWidth + Math.floor(px)) * 4;
         const depthValue = imageData.data[idx] / 255.0;
         const invZ = invZMax + depthValue * (invZMin - invZMax);
         if (Math.abs(invZ) < 1e-8) return null;
@@ -715,9 +738,10 @@
       const rayDirProj = rayDirWorld.transformDirection(projectorMatrixInv);
 
       // Ray marching in inverse depth space
-      // Start at far plane (invZMax) and march toward near plane (invZMin)
-      let currentInvZ = invZMax;
-      let stepSize = (invZMin - invZMax) / 100.0; // Initial step: 100 steps across range
+      // Start at near plane (invZMin, front) and march toward far plane (invZMax, back)
+      // Note: invZMin > invZMax, so we march by decreasing invZ
+      let currentInvZ = invZMin;
+      let stepSize = (invZMin - invZMax) / 100.0; // Initial step: 100 steps across range (positive)
       const minStepSize = (invZMin - invZMax) / 10000.0; // Precision limit
       let iterations = 0;
       const maxIterations = 200;
@@ -739,31 +763,32 @@
 
         // Check if within image bounds
         if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) {
-          // Ray is outside image, advance
-          currentInvZ += stepSize;
-          if (currentInvZ > invZMin) break; // Past near plane
+          // Ray is outside image, advance toward far (decreasing invZ)
+          currentInvZ -= stepSize;
+          if (currentInvZ < invZMax) break; // Past far plane
           continue;
         }
 
         // Sample depth map at this pixel
         const surfaceDepth = sampleDepthMap(px, py);
         if (surfaceDepth === null) {
-          // No valid depth, advance
-          currentInvZ += stepSize;
-          if (currentInvZ > invZMin) break;
+          // No valid depth, advance toward far (decreasing invZ)
+          currentInvZ -= stepSize;
+          if (currentInvZ < invZMax) break;
           continue;
         }
 
         // Compare ray depth with surface depth
-        if (currentDepth > surfaceDepth) {
-          // Ray is behind surface, keep marching forward (increasing invZ)
-          currentInvZ += stepSize;
-          if (currentInvZ > invZMin) break; // Past near plane
-        } else {
-          // Ray is in front of surface, we overshot - backtrack and refine
+        // invZMin > invZMax, so as currentInvZ decreases from min to max, currentDepth increases
+        if (currentDepth < surfaceDepth) {
+          // Ray is still in front of surface, keep marching toward far (decreasing invZ)
           currentInvZ -= stepSize;
+          if (currentInvZ < invZMax) break; // Past far plane
+        } else {
+          // Ray has passed through surface, we overshot - backtrack and refine
+          currentInvZ += stepSize;
           stepSize /= 2.0; // Halve step size
-          currentInvZ += stepSize; // Advance with smaller step
+          currentInvZ -= stepSize; // Advance with smaller step
         }
       }
 
@@ -779,7 +804,7 @@
 
         if (px >= 0 && px < imgWidth && py >= 0 && py < imgHeight) {
           // Transform back to world space
-          const hitPointWorld = rayPosProj.applyMatrix4(projector.matrixWorld);
+          const hitPointWorld = rayPosProj.applyMatrix4(activeProjector.matrixWorld);
           console.log(`Raycast converged in ${iterations} iterations at pixel (${px.toFixed(1)}, ${py.toFixed(1)})`);
           return hitPointWorld;
         }
@@ -1450,18 +1475,36 @@
         document.getElementById('camera-pos').textContent =
           `(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)})`;
 
-        // Update camera focal ratio (f2 / planeWidth)
-        // Get RaycastPlane from projector to read uniforms
-        if (projector && projector.children) {
-          const raycastPlane = projector.children.find(child => child.constructor.name === 'RaycastPlane');
-          if (raycastPlane && raycastPlane.uniforms) {
-            const f2 = raycastPlane.uniforms.f2.value;
-            const planeWidth = raycastPlane.uniforms.oRes.value.x;
-            if (planeWidth > 0) {
-              const cameraFocalRatio = f2 / planeWidth;
-              document.getElementById('camera-focal-ratio').textContent = cameraFocalRatio.toFixed(4);
-            }
+        // Update slant and roll from RaycastPlane uniforms
+        // Get RaycastPlane from scene to read uniforms
+        let raycastPlane = null;
+        scene.traverse((obj) => {
+          if (obj.constructor.name === 'RaycastPlane') {
+            raycastPlane = obj;
           }
+        });
+
+        if (raycastPlane && raycastPlane.uniforms) {
+          // Update slant
+          const slant = raycastPlane.uniforms.sl2.value;
+          document.getElementById('camera-slant').textContent =
+            `(${slant.x.toFixed(3)}, ${slant.y.toFixed(3)})`;
+
+          // Update roll
+          const roll = raycastPlane.uniforms.roll2.value;
+          document.getElementById('camera-roll').textContent = roll.toFixed(1);
+
+          // Update camera focal ratio (f2 / planeWidth)
+          const f2 = raycastPlane.uniforms.f2.value;
+          const planeWidth = raycastPlane.uniforms.oRes.value.x;
+          if (planeWidth > 0) {
+            const cameraFocalRatio = f2 / planeWidth;
+            document.getElementById('camera-focal-ratio').textContent = cameraFocalRatio.toFixed(4);
+          }
+        } else {
+          // Fallback: display defaults when no RaycastPlane
+          document.getElementById('camera-slant').textContent = '(0.000, 0.000)';
+          document.getElementById('camera-roll').textContent = '0.0';
         }
       }
 
