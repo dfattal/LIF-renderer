@@ -167,9 +167,9 @@ export class RaycastPlane extends THREE.Mesh {
     }
 
     // Determine view count based on number of projectors
-    // For now, force mono rendering even if we have multiple projectors
-    this.viewCount = 1; // Force mono for now
-    console.log(`RaycastPlane: Initializing with ${this.projectors.length} projector(s), forcing mono rendering`);
+    // Start with mono by default, can be toggled with setViewMode()
+    this.viewCount = 1; // Start mono
+    console.log(`RaycastPlane: Initializing with ${this.projectors.length} projector(s), starting in mono mode`);
 
     // Always use mono shader for now
     console.log('RaycastPlane: Using mono shader');
@@ -380,48 +380,60 @@ export class RaycastPlane extends THREE.Mesh {
       this.uniforms.roll1.value = 0;
 
     } else if (this.viewCount === 2) {
-      // Stereo rendering
-      this.uniforms.uNumLayersL.value = numLayers;
-      this.uniforms.uNumLayersR.value = numLayers;
+      // Stereo rendering - use layers from both projectors
+      const layersL = this.projectors[0]?.lifLayers || [];
+      const layersR = this.projectors[1]?.lifLayers || [];
+      const numLayersL = Math.min(layersL.length, 4);
+      const numLayersR = Math.min(layersR.length, 4);
 
-      for (let i = 0; i < numLayers; i++) {
-        const layer = layers[i];
+      this.uniforms.uNumLayersL.value = numLayersL;
+      this.uniforms.uNumLayersR.value = numLayersR;
 
+      for (let i = 0; i < Math.max(numLayersL, numLayersR); i++) {
         // LEFT view (index i)
-        const texturesL = this.layerTextures.get(i);
-        if (texturesL) {
-          this.uniforms.uImageL.value[i] = texturesL.rgb;
-          this.uniforms.uDisparityMapL.value[i] = texturesL.depthMask;
-          this.uniforms.invZminL.value[i] = layer.invDepthRange.min;
-          this.uniforms.invZmaxL.value[i] = layer.invDepthRange.max;
-          this.uniforms.f1L.value[i] = layer.intrinsics.fx;
-          this.uniforms.iResL.value[i] = new THREE.Vector2(layer.width, layer.height);
+        if (i < numLayersL) {
+          const layerL = layersL[i];
+          const texturesL = this.layerTextures.get(i);
+          if (texturesL) {
+            this.uniforms.uImageL.value[i] = texturesL.rgb;
+            this.uniforms.uDisparityMapL.value[i] = texturesL.depthMask;
+            const baseline_mm_L = layerL.invDepthRange.baseline ?? 0.045;
+            this.uniforms.invZminL.value[i] = layerL.invDepthRange.min / baseline_mm_L;
+            this.uniforms.invZmaxL.value[i] = layerL.invDepthRange.max / baseline_mm_L;
+            this.uniforms.f1L.value[i] = layerL.intrinsics.fx;
+            this.uniforms.iResL.value[i] = new THREE.Vector2(layerL.width, layerL.height);
+          }
         }
 
         // RIGHT view (index i + 100)
-        const texturesR = this.layerTextures.get(i + 100);
-        if (texturesR) {
-          this.uniforms.uImageR.value[i] = texturesR.rgb;
-          this.uniforms.uDisparityMapR.value[i] = texturesR.depthMask;
-          this.uniforms.invZminR.value[i] = layer.invDepthRange.min;
-          this.uniforms.invZmaxR.value[i] = layer.invDepthRange.max;
-          this.uniforms.f1R.value[i] = layer.intrinsics.fx;
-          this.uniforms.iResR.value[i] = new THREE.Vector2(layer.width, layer.height);
+        if (i < numLayersR) {
+          const layerR = layersR[i];
+          const texturesR = this.layerTextures.get(i + 100);
+          if (texturesR) {
+            this.uniforms.uImageR.value[i] = texturesR.rgb;
+            this.uniforms.uDisparityMapR.value[i] = texturesR.depthMask;
+            const baseline_mm_R = layerR.invDepthRange.baseline ?? 0.045;
+            this.uniforms.invZminR.value[i] = layerR.invDepthRange.min / baseline_mm_R;
+            this.uniforms.invZmaxR.value[i] = layerR.invDepthRange.max / baseline_mm_R;
+            this.uniforms.f1R.value[i] = layerR.intrinsics.fx;
+            this.uniforms.iResR.value[i] = new THREE.Vector2(layerR.width, layerR.height);
+          }
         }
       }
 
-      // Set LEFT and RIGHT view positions from projectors
-      this.uniforms.uViewPositionL.value.copy(this.projectors[0].position);
+      // NOTE: uViewPositionL/R and uViewRotationL/R are now set by updateProjectorPoses()
+      // Initialize to identity/zero (will be overwritten in render loop)
+      this.uniforms.uViewPositionL.value.set(0, 0, 0);
+      this.uniforms.uViewRotationL.value.identity();
       this.uniforms.sk1L.value.set(0, 0);
       this.uniforms.sl1L.value.set(0, 0);
       this.uniforms.roll1L.value = 0;
 
-      if (this.projectors.length > 1) {
-        this.uniforms.uViewPositionR.value.copy(this.projectors[1].position);
-        this.uniforms.sk1R.value.set(0, 0);
-        this.uniforms.sl1R.value.set(0, 0);
-        this.uniforms.roll1R.value = 0;
-      }
+      this.uniforms.uViewPositionR.value.set(0, 0, 0);
+      this.uniforms.uViewRotationR.value.identity();
+      this.uniforms.sk1R.value.set(0, 0);
+      this.uniforms.sl1R.value.set(0, 0);
+      this.uniforms.roll1R.value = 0;
     }
 
     // Set iResOriginal to physical plane size (same as oRes)
@@ -505,6 +517,46 @@ export class RaycastPlane extends THREE.Mesh {
   }
 
   /**
+   * Update all projector poses in stereo mode (called for both L and R projectors)
+   */
+  public updateProjectorPoses(camera: THREE.Camera): void {
+    // Get camera's inverse matrix (world → camera transform)
+    const cameraMatrixInv = camera.matrixWorldInverse;
+    const cameraRotationInv = new THREE.Matrix3().setFromMatrix4(cameraMatrixInv);
+
+    if (this.viewCount === 1) {
+      // Mono mode: update single projector
+      if (this.projector) {
+        this.updateProjectorPose(this.projector, camera);
+      }
+    } else if (this.viewCount === 2) {
+      // Stereo mode: update both projectors (L and R)
+      if (this.projectors.length >= 2) {
+        const projectorL = this.projectors[0];
+        const projectorR = this.projectors[1];
+
+        // Update left projector
+        projectorL.updateMatrixWorld();
+        const posL = projectorL.position.clone().applyMatrix4(cameraMatrixInv);
+        this.uniforms.uViewPositionL.value.set(posL.x, posL.y, -posL.z); // Z-flip
+
+        const rotL = new THREE.Matrix3().setFromMatrix4(projectorL.matrixWorld);
+        const rotLInCameraSpace = new THREE.Matrix3().multiplyMatrices(cameraRotationInv, rotL);
+        this.uniforms.uViewRotationL.value.copy(rotLInCameraSpace);
+
+        // Update right projector
+        projectorR.updateMatrixWorld();
+        const posR = projectorR.position.clone().applyMatrix4(cameraMatrixInv);
+        this.uniforms.uViewPositionR.value.set(posR.x, posR.y, -posR.z); // Z-flip
+
+        const rotR = new THREE.Matrix3().setFromMatrix4(projectorR.matrixWorld);
+        const rotRInCameraSpace = new THREE.Matrix3().multiplyMatrices(cameraRotationInv, rotR);
+        this.uniforms.uViewRotationR.value.copy(rotRInCameraSpace);
+      }
+    }
+  }
+
+  /**
    * Update view-dependent uniforms (called every frame)
    * These represent the render camera (where we're viewing from)
    */
@@ -578,6 +630,57 @@ export class RaycastPlane extends THREE.Mesh {
    */
   public setFeathering(amount: number): void {
     this.uniforms.feathering.value = amount;
+  }
+
+  /**
+   * Toggle between mono and stereo rendering modes
+   * @returns The new view mode ('mono' or 'stereo')
+   */
+  public async toggleViewMode(): Promise<'mono' | 'stereo'> {
+    if (this.projectors.length < 2) {
+      console.warn('RaycastPlane: Cannot enable stereo mode - only 1 projector available');
+      return 'mono';
+    }
+
+    // Toggle between 1 (mono) and 2 (stereo)
+    const oldViewCount = this.viewCount;
+    this.viewCount = this.viewCount === 1 ? 2 : 1;
+    const mode = this.viewCount === 1 ? 'mono' : 'stereo';
+
+    // If switching to stereo, load textures for both projectors
+    if (this.viewCount === 2 && oldViewCount === 1) {
+      console.log('RaycastPlane: Loading stereo textures...');
+      await this.loadStereoLayerTextures(
+        this.projectors[0].lifLayers,
+        this.projectors[1].lifLayers
+      );
+      // Update uniforms with stereo data
+      this.updateStaticUniforms();
+    }
+
+    // Switch fragment shader (vertex shader stays the same)
+    const fragmentShader = this.viewCount === 1 ? rayCastMonoLDI : rayCastStereoLDI;
+
+    const material = this.material as THREE.ShaderMaterial;
+    material.fragmentShader = fragmentShader;
+    material.needsUpdate = true;
+
+    console.log(`RaycastPlane: Switched to ${mode} mode (${this.viewCount} view${this.viewCount > 1 ? 's' : ''})`);
+    return mode;
+  }
+
+  /**
+   * Get the current view mode
+   */
+  public getViewMode(): 'mono' | 'stereo' {
+    return this.viewCount === 1 ? 'mono' : 'stereo';
+  }
+
+  /**
+   * Get the number of projectors available
+   */
+  public getProjectorCount(): number {
+    return this.projectors.length;
   }
 
   /**

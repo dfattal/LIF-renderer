@@ -453,6 +453,7 @@
             viewNavigation +
             'R: Reset view<br>' +
             'L: Toggle LDI mode<br>' +
+            'M: Toggle Mono/Stereo<br>' +
             'V: Toggle depth view<br>' +
             'G: Toggle gradient filter<br>' +
             'X: Show textures<br>' +
@@ -482,7 +483,7 @@
     updateControls('free');
 
     // Keyboard controls
-    document.addEventListener('keydown', (e) => {
+    document.addEventListener('keydown', async (e) => {
       switch (e.code) {
         case 'KeyW': moveState.forward = true; break;
         case 'KeyS': moveState.backward = true; break;
@@ -539,8 +540,26 @@
           }
           break;
         case 'KeyM':
-          // Legacy: 'M' key now does nothing (use 'L' for LDI mode toggle)
-          console.log("'M' key is no longer used. Press 'L' to toggle LDI mode.");
+          // Toggle Mono/Stereo raycast mode
+          const holoRenderer5 = findHoloRenderer();
+          if (holoRenderer5 && holoRenderer5.raycastPlane) {
+            const newMode = await holoRenderer5.raycastPlane.toggleViewMode();
+            const projectorCount = holoRenderer5.raycastPlane.getProjectorCount();
+
+            if (newMode === 'stereo' && projectorCount >= 2) {
+              console.log('Switched to STEREO raycast mode (using both views)');
+              // Hide view selector in stereo mode
+              document.getElementById('view-selector').style.display = 'none';
+            } else {
+              console.log('Switched to MONO raycast mode');
+              // Show view selector in mono mode if multiple views available
+              if (loadedProjectors.length > 1) {
+                document.getElementById('view-selector').style.display = 'block';
+              }
+            }
+          } else {
+            console.log('Raycast plane not available - switch to raycast mode first with L key');
+          }
           break;
         case 'KeyU':
           // Debug: Log all shader uniforms
@@ -1254,20 +1273,28 @@
           console.log('View 0 orbit center from LifLoader:', result.orbitCenter);
         }
 
-        // Remove old projector from scene
+        // Remove old projector(s) from scene
         scene.remove(projector);
+        // Remove any other loaded projectors from previous LIF file
+        loadedProjectors.forEach(p => scene.remove(p));
 
-        // Use first view (views[0])
+        // Add ALL projectors to the scene for stereo support
+        // In mono mode, we'll use view switching to control which one is active
+        result.projectors.forEach((p, index) => {
+          scene.add(p);
+          // Add axes helper to each projector
+          const axesHelper = new THREE.AxesHelper(0.5);
+          p.add(axesHelper);
+          // Initially hide all except the first one (for mesh rendering compatibility)
+          p.visible = (index === 0);
+        });
+
+        // Use first view as the active projector
         const newProjector = result.projectors[0];
-        scene.add(newProjector);
 
         // Update global projector reference
         window.projector = newProjector;
         projector = newProjector; // Update local reference too
-
-        // Add axes helper to new projector
-        const newAxesHelper = new THREE.AxesHelper(0.5);
-        newProjector.add(newAxesHelper);
 
         // Populate view selector dropdown if multiple views
         const viewSelect = document.getElementById('view-select');
@@ -1419,20 +1446,20 @@
         // Wait for the projector to be fully initialized (textures loaded)
         await selectedProjector.initialized;
 
-        // Update RaycastPlane with new projector data FIRST (if in raycast mode)
-        // This ensures textures are loaded before we swap projectors
+        // Update RaycastPlane with new projector data FIRST (if in raycast mode and mono)
+        // This ensures textures are loaded before we switch visibility
         const holoRenderer = findHoloRenderer();
         if (holoRenderer && holoRenderer.getRenderMode() === 'raytracing') {
-          // Access the raycast plane and update its projector data
-          if (holoRenderer.raycastPlane) {
+          // Only update projector data in mono mode (stereo uses all projectors)
+          if (holoRenderer.raycastPlane && holoRenderer.raycastPlane.getViewMode() === 'mono') {
             await holoRenderer.raycastPlane.updateProjectorData(selectedProjector);
             console.log('Updated RaycastPlane with new projector textures');
           }
         }
 
-        // Now swap the projectors in the scene - textures are already loaded
-        scene.remove(projector);
-        scene.add(selectedProjector);
+        // Hide old projector, show new one (they're both in the scene for stereo support)
+        projector.visible = false;
+        selectedProjector.visible = true;
 
         // Update global reference
         window.projector = selectedProjector;

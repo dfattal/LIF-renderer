@@ -284,8 +284,9 @@ export class HoloRenderer extends THREE.Mesh {
     // Update camera matrices before transforming to camera-local space
     camera.updateMatrixWorld();
 
-    // Update projector pose in camera-local coordinates
-    this.raycastPlane.updateProjectorPose(projectors[0], camera);
+    // Update projector pose(s) in camera-local coordinates
+    // This handles both mono (single projector) and stereo (both projectors) modes
+    this.raycastPlane.updateProjectorPoses(camera);
 
     // Update dynamic uniforms (camera pose)
     this.raycastPlane.updateDynamicUniforms(camera, renderer);
