@@ -13,9 +13,10 @@ uniform float uTime;
 uniform sampler2D uImage[4]; // for LDI this is an array
 uniform sampler2D uDisparityMap[4]; // for LDI this is an array
 uniform float invZmin[4], invZmax[4]; // used to get invZ
-uniform vec3 uViewPosition; // in normalized camera space, common to all layers, "C1"
-uniform vec2 sk1, sl1; // common to all layers
-uniform float roll1; // common to all layers, f1 in px
+uniform vec3 uViewPosition; // in camera-local space, common to all layers, "C1"
+uniform mat3 uViewRotation; // NEW: Projector rotation matrix in camera-local space
+uniform vec2 sk1, sl1; // DEPRECATED: kept for backward compatibility
+uniform float roll1; // DEPRECATED: kept for backward compatibility
 uniform float f1[4]; // f per layer
 uniform vec2 iRes[4];
 uniform int uNumLayers;
@@ -228,7 +229,20 @@ void main(void) {
     if((abs(uv.x - .5) < .5 * newDim.x) && (abs(uv.y - .5) < .5 * newDim.y)) {
 
         vec3 C1 = uViewPosition;
-        mat3 SKR1 = matFromSkew(sk1) * matFromRoll(roll1) * matFromSlant(sl1); // Notice the focal part is missing, changes per layer
+
+        // Apply Z-flip transform and use rotation matrix if available
+        mat3 viewRotationMatrix = flipZ * transpose_m(uViewRotation) * flipZ;
+        bool useRotationMatrix = (length(uViewRotation[0]) > 0.01);
+
+        mat3 SKR1;
+        if (useRotationMatrix) {
+            // Modern path: use rotation matrix
+            SKR1 = matFromSkew(sk1) * viewRotationMatrix;
+        } else {
+            // Legacy path: use slant/roll decomposition
+            SKR1 = matFromSkew(sk1) * matFromRoll(roll1) * matFromSlant(sl1);
+        }
+        // Notice the focal part is missing, changes per layer
 
         vec3 C2 = uFacePosition;
         // Use rotation matrix directly instead of decomposed roll/slant

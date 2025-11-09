@@ -41,6 +41,7 @@ export class HoloRenderer extends THREE.Mesh {
 
   // Raytracing rendering
   private raycastPlane: RaycastPlane | null = null;
+  private renderCameraChildren: boolean = false;
 
   static EMPTY_TEXTURE = new THREE.Texture();
 
@@ -268,14 +269,34 @@ export class HoloRenderer extends THREE.Mesh {
       // Update plane size to match camera FOV (only needs to be done once, or on window resize)
       this.raycastPlane.updatePlaneSizeFromCamera(camera);
 
-      // Add to scene (not as child of projector - it will follow camera instead)
-      scene.add(this.raycastPlane);
-      console.log("RaycastPlane created and initialized, added to scene");
+      // PHASE 2: Make plane a child of camera (viewer-local space, like WebXR)
+      camera.add(this.raycastPlane);
+
+      // Position at fixed distance in camera-local space
+      const planeDistance = this.raycastPlane.planeDistance;
+      this.raycastPlane.position.set(0, 0, -planeDistance);
+      this.raycastPlane.quaternion.identity(); // Face camera
+
+      console.log("RaycastPlane attached to camera (viewer-local) at distance:", planeDistance);
+      console.log("Setting up custom render pass for camera children...");
     }
 
-    // Update dynamic uniforms and transform
+    // Update camera matrices before transforming to camera-local space
+    camera.updateMatrixWorld();
+
+    // Update projector pose in camera-local coordinates
+    this.raycastPlane.updateProjectorPose(projectors[0], camera);
+
+    // Update dynamic uniforms (camera pose)
     this.raycastPlane.updateDynamicUniforms(camera, renderer);
-    this.raycastPlane.updatePlaneTransform(camera);
+
+    // CRITICAL: Manually render the plane since it's a camera child
+    // THREE.js doesn't render camera children by default, so we do it explicitly
+    // Use autoClear: false to avoid clearing the scene that was just rendered
+    const oldAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.render(this.raycastPlane, camera);
+    renderer.autoClear = oldAutoClear;
 
     // Hide the mesh geometry when in raytracing mode
     if (this.geometry !== new THREE.BufferGeometry()) {
@@ -425,9 +446,10 @@ export class HoloRenderer extends THREE.Mesh {
 
     // Clean up old mode resources
     if (mode === 'mesh' && this.raycastPlane) {
-      // Remove from parent (projector) not from this (HoloRenderer)
+      // PHASE 2: Remove from camera (parent is now camera, not projector)
       if (this.raycastPlane.parent) {
         this.raycastPlane.parent.remove(this.raycastPlane);
+        console.log("RaycastPlane removed from camera");
       }
       this.raycastPlane.dispose();
       this.raycastPlane = null;

@@ -13,9 +13,10 @@ uniform float uTime;
 uniform sampler2D uImageL[4]; // for LDI this is an array
 uniform sampler2D uDisparityMapL[4]; // for LDI this is an array
 uniform float invZminL[4], invZmaxL[4]; // used to get invZ
-uniform vec3 uViewPositionL; // in normalized camera space, common to all layers, "C1"
-uniform vec2 sk1L, sl1L; // common to all layers
-uniform float roll1L; // common to all layers, f1 in px
+uniform vec3 uViewPositionL; // in camera-local space, common to all layers, "C1"
+uniform mat3 uViewRotationL; // NEW: Left projector rotation matrix in camera-local space
+uniform vec2 sk1L, sl1L; // DEPRECATED: kept for backward compatibility
+uniform float roll1L; // DEPRECATED: kept for backward compatibility
 uniform float f1L[4]; // f per layer
 uniform vec2 iResL[4];
 
@@ -26,9 +27,10 @@ uniform int uNumLayersL;
 uniform sampler2D uImageR[4]; // for LDI this is an array
 uniform sampler2D uDisparityMapR[4]; // for LDI this is an array
 uniform float invZminR[4], invZmaxR[4]; // used to get invZ
-uniform vec3 uViewPositionR; // in normalized camera space, common to all layers, "C1"
-uniform vec2 sk1R, sl1R; // common to all layers
-uniform float roll1R; // common to all layers, f1 in px
+uniform vec3 uViewPositionR; // in camera-local space, common to all layers, "C1"
+uniform mat3 uViewRotationR; // NEW: Right projector rotation matrix in camera-local space
+uniform vec2 sk1R, sl1R; // DEPRECATED: kept for backward compatibility
+uniform float roll1R; // DEPRECATED: kept for backward compatibility
 uniform float f1R[4]; // f per layer
 uniform vec2 iResR[4];
 // add originalF
@@ -236,10 +238,26 @@ void main(void) {
     if((abs(uv.x - .5) < .5 * newDim.x) && (abs(uv.y - .5) < .5 * newDim.y)) {
 
         vec3 C1L = uViewPositionL;
-        mat3 SKR1L = matFromSkew(sk1L) * matFromRoll(roll1L) * matFromSlant(sl1L); // Notice the focal part is missing, changes per layer
+        // NEW: Use rotation matrix directly (with Z-flip transform as per CLAUDE.md)
+        mat3 viewRotationMatrixL = flipZ * transpose_m(uViewRotationL) * flipZ;
+        bool useRotationMatrixL = (length(uViewRotationL[0]) > 0.01);
+        mat3 SKR1L;
+        if (useRotationMatrixL) {
+            SKR1L = matFromSkew(sk1L) * viewRotationMatrixL;
+        } else {
+            SKR1L = matFromSkew(sk1L) * matFromRoll(roll1L) * matFromSlant(sl1L);
+        }
 
         vec3 C1R = uViewPositionR;
-        mat3 SKR1R = matFromSkew(sk1R) * matFromRoll(roll1R) * matFromSlant(sl1R); // Notice the focal part is missing, changes per layer
+        // NEW: Use rotation matrix directly (with Z-flip transform as per CLAUDE.md)
+        mat3 viewRotationMatrixR = flipZ * transpose_m(uViewRotationR) * flipZ;
+        bool useRotationMatrixR = (length(uViewRotationR[0]) > 0.01);
+        mat3 SKR1R;
+        if (useRotationMatrixR) {
+            SKR1R = matFromSkew(sk1R) * viewRotationMatrixR;
+        } else {
+            SKR1R = matFromSkew(sk1R) * matFromRoll(roll1R) * matFromSlant(sl1R);
+        }
 
         vec3 C2 = uFacePosition;
         mat3 FSKR2 = matFromFocal(vec2(f2 / oRes.x, f2 / oRes.y)) * matFromSkew(sk2) * matFromRoll(roll2) * matFromSlant(sl2);

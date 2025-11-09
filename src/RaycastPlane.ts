@@ -14,7 +14,8 @@ export class RaycastPlane extends THREE.Mesh {
   private projectors: HoloProjector[] = []; // Store all projectors for stereo
   private viewCount: number = 1;
   private uniforms: { [uniform: string]: THREE.IUniform };
-  private planeDistance: number = 1.0;
+  public planeDistance: number = 1.0;
+  public trackedCamera: THREE.Camera | null = null;
   private layerTextures: Map<number, { rgb: THREE.Texture; depthMask: THREE.Texture }> = new Map();
 
   constructor(width: number = 1, height: number = 1) {
@@ -39,6 +40,17 @@ export class RaycastPlane extends THREE.Mesh {
 
     this.uniforms = uniforms;
     this.name = "RaycastPlane";
+
+    // IMPORTANT: Force rendering even when attached to camera
+    this.frustumCulled = false;
+    this.matrixAutoUpdate = true;
+
+    // Store reference to camera (will be set during initialization)
+    this.trackedCamera = null;
+    this.planeDistance = 1.0;
+
+    // onBeforeRender will be set up after initialization when we know the camera
+    // (removed auto-update code - camera child handles this automatically)
 
     // Add red border helper for debugging
     const borderGeometry = new THREE.EdgesGeometry(geometry);
@@ -83,9 +95,10 @@ export class RaycastPlane extends THREE.Mesh {
       invZmin: { value: Array(4).fill(0.1) },
       invZmax: { value: Array(4).fill(0.01) },
       uViewPosition: { value: new THREE.Vector3(0, 0, 0) },
-      sk1: { value: new THREE.Vector2(0, 0) },
-      sl1: { value: new THREE.Vector2(0, 0) },
-      roll1: { value: 0.0 },
+      uViewRotation: { value: new THREE.Matrix3() }, // NEW: Projector rotation matrix
+      sk1: { value: new THREE.Vector2(0, 0) }, // DEPRECATED: kept for compatibility
+      sl1: { value: new THREE.Vector2(0, 0) }, // DEPRECATED: kept for compatibility
+      roll1: { value: 0.0 }, // DEPRECATED: kept for compatibility
       f1: { value: Array(4).fill(500.0) },
       iRes: { value: Array(4).fill(new THREE.Vector2(1280, 800)) },
       uNumLayers: { value: 0 },
@@ -96,9 +109,10 @@ export class RaycastPlane extends THREE.Mesh {
       invZminL: { value: Array(4).fill(0.1) },
       invZmaxL: { value: Array(4).fill(0.01) },
       uViewPositionL: { value: new THREE.Vector3(0, 0, 0) },
-      sk1L: { value: new THREE.Vector2(0, 0) },
-      sl1L: { value: new THREE.Vector2(0, 0) },
-      roll1L: { value: 0.0 },
+      uViewRotationL: { value: new THREE.Matrix3() }, // NEW: Left projector rotation matrix
+      sk1L: { value: new THREE.Vector2(0, 0) }, // DEPRECATED
+      sl1L: { value: new THREE.Vector2(0, 0) }, // DEPRECATED
+      roll1L: { value: 0.0 }, // DEPRECATED
       f1L: { value: Array(4).fill(500.0) },
       iResL: { value: Array(4).fill(new THREE.Vector2(1280, 800)) },
       uNumLayersL: { value: 0 },
@@ -108,9 +122,10 @@ export class RaycastPlane extends THREE.Mesh {
       invZminR: { value: Array(4).fill(0.1) },
       invZmaxR: { value: Array(4).fill(0.01) },
       uViewPositionR: { value: new THREE.Vector3(0, 0, 0) },
-      sk1R: { value: new THREE.Vector2(0, 0) },
-      sl1R: { value: new THREE.Vector2(0, 0) },
-      roll1R: { value: 0.0 },
+      uViewRotationR: { value: new THREE.Matrix3() }, // NEW: Right projector rotation matrix
+      sk1R: { value: new THREE.Vector2(0, 0) }, // DEPRECATED
+      sl1R: { value: new THREE.Vector2(0, 0) }, // DEPRECATED
+      roll1R: { value: 0.0 }, // DEPRECATED
       f1R: { value: Array(4).fill(500.0) },
       iResR: { value: Array(4).fill(new THREE.Vector2(1280, 800)) },
       uNumLayersR: { value: 0 },
@@ -266,17 +281,11 @@ export class RaycastPlane extends THREE.Mesh {
   private updatePlaneDistance(): void {
     if (!this.projector) return;
 
-    // Get baseline in meters
-    const baseline_mm = this.projector.invDepthRange.baseline ?? 0.045; // Default 45mm = 0.045m
+    // Use a very large distance to place the raycast plane far from camera
+    // This avoids depth precision issues and ensures it's always rendered
+    this.planeDistance = 1e6; // 1 million units
 
-    // Get inverse convergence distance from stereo_render_data or fallback
-    const invd = (this as any).invdFromStereoData ??
-                 (this.projector.invDepthRange.min + this.projector.invDepthRange.max) / 2;
-
-    // Calculate distance: z = baseline_mm / invd
-    this.planeDistance = baseline_mm / invd;
-
-    console.log(`Plane distance calculated: ${this.planeDistance}m (baseline: ${baseline_mm}m, invd: ${invd})`);
+    console.log(`Plane distance set to: ${this.planeDistance} units (far plane for raycast rendering)`);
   }
 
   /**
@@ -317,12 +326,7 @@ export class RaycastPlane extends THREE.Mesh {
       border.renderOrder = 999;
       this.add(border);
 
-      console.log(`Plane size updated from camera FOV:`, {
-        distance: this.planeDistance,
-        fov: (camera as THREE.PerspectiveCamera).fov,
-        aspect,
-        planeSize: [planeWidth, planeHeight]
-      });
+      console.log(`RaycastPlane: Plane size updated (${planeWidth.toFixed(2)}m x ${planeHeight.toFixed(2)}m at ${this.planeDistance.toFixed(2)}m)`);
     }
   }
 
@@ -361,25 +365,19 @@ export class RaycastPlane extends THREE.Mesh {
         this.uniforms.iRes.value[i] = new THREE.Vector2(layer.width, layer.height);
       }
 
-      // Set source view position (projector position in THREE.js world space)
-      // Note: This is already in meters, scaled by baseline_mm during projector creation
-      this.uniforms.uViewPosition.value.copy(this.projector.position);
+      // NOTE: uViewPosition and uViewRotation are now set by updateProjectorPose()
+      // which transforms from world space to camera-local space
+      // Initialize to identity matrix (will be overwritten by updateProjectorPose in render loop)
+      this.uniforms.uViewRotation.value.identity();
+      this.uniforms.uViewPosition.value.set(0, 0, 0);
 
       // View transform parameters (skew, slant, roll)
       // These are currently zero because:
       // - frustum_skew is handled via principal point offset (cx, cy)
-      // - rotation is handled via projector's quaternion transform
+      // - rotation is handled via projector's quaternion transform (via uViewRotation)
       this.uniforms.sk1.value.set(0, 0);
       this.uniforms.sl1.value.set(0, 0);
       this.uniforms.roll1.value = 0;
-
-      console.log('Mono view uniforms set:', {
-        uViewPosition: this.uniforms.uViewPosition.value.toArray(),
-        f1: this.uniforms.f1.value,
-        iRes: this.uniforms.iRes.value.map((v: any) => [v.x, v.y]),
-        invZranges: layers.map((l, i) => [this.uniforms.invZmin.value[i], this.uniforms.invZmax.value[i]]),
-        numLayers
-      });
 
     } else if (this.viewCount === 2) {
       // Stereo rendering
@@ -437,7 +435,52 @@ export class RaycastPlane extends THREE.Mesh {
       this.uniforms.iResOriginal.value.set(planeWidth, planeHeight);
     }
 
-    console.log(`Static uniforms updated for ${this.viewCount} view(s)`);
+    console.log(`RaycastPlane: Static uniforms ready (${this.viewCount} view(s), ${numLayers} layer(s))`);
+  }
+
+  /**
+   * Update projector pose uniforms in camera-local coordinates
+   * Transforms projector world-space pose to camera-local space
+   */
+  public updateProjectorPose(projector: HoloProjector, camera: THREE.Camera): void {
+    if (!projector) return;
+
+    // Get camera's inverse matrix (world → camera transform)
+    const cameraMatrixInv = camera.matrixWorldInverse;
+
+    // Update projector's world matrix
+    projector.updateMatrixWorld();
+
+    // Transform position: world → camera space
+    const posInCameraSpace = projector.position.clone().applyMatrix4(cameraMatrixInv);
+
+    // Flip Z coordinate: THREE.js camera looks down -Z, shader expects +Z forward
+    // So we negate Z when passing to shader
+    this.uniforms.uViewPosition.value.set(
+      posInCameraSpace.x,
+      posInCameraSpace.y,
+      -posInCameraSpace.z  // Z-flip for coordinate system conversion
+    );
+
+    // Store for debugging
+    (this as any)._debugProjectorWorldPos = projector.position.clone();
+    (this as any)._debugProjectorCameraPos = posInCameraSpace.clone();
+    (this as any)._debugProjectorShaderPos = this.uniforms.uViewPosition.value.clone();
+
+    // Transform rotation: world → camera space
+    // Extract rotation matrix from projector's world matrix
+    const projectorRotationWorld = new THREE.Matrix3().setFromMatrix4(projector.matrixWorld);
+
+    // Extract rotation matrix from camera's inverse matrix
+    const cameraRotationInv = new THREE.Matrix3().setFromMatrix4(cameraMatrixInv);
+
+    // Combine: camera_rotation_inv * projector_rotation_world
+    const rotationInCameraSpace = new THREE.Matrix3().multiplyMatrices(
+      cameraRotationInv,
+      projectorRotationWorld
+    );
+
+    this.uniforms.uViewRotation.value.copy(rotationInCameraSpace);
   }
 
   /**
@@ -447,20 +490,18 @@ export class RaycastPlane extends THREE.Mesh {
   public updateDynamicUniforms(camera: THREE.Camera, renderer: THREE.WebGLRenderer): void {
     if (!this.projector) return;
 
-    // Update render camera position with Z flipped
-    this.uniforms.uFacePosition.value.set(
-      camera.position.x,
-      camera.position.y,
-      -camera.position.z
-    );
+    // PHASE 2: Camera position in camera-local space is origin (canvas is camera child)
+    // The raycast shader expects both C1 (projector) and C2 (camera) in the same coordinate system
+    this.uniforms.uFacePosition.value.set(0, 0, 0);
 
     // Get raycast plane physical size (in meters)
     const planeGeometry = this.geometry as THREE.PlaneGeometry;
     const planeWidth = planeGeometry.parameters.width;
     const planeHeight = planeGeometry.parameters.height;
 
-    // Set oRes to the physical plane size
+    // Set oRes AND iResOriginal to the physical plane size
     this.uniforms.oRes.value.set(planeWidth, planeHeight);
+    this.uniforms.iResOriginal.value.set(planeWidth, planeHeight);
 
     // Calculate focal length f2 from camera FOV and plane size
     // Formula: f2 = (planeHeight / 2) / tan(fov / 2)
@@ -472,15 +513,9 @@ export class RaycastPlane extends THREE.Mesh {
       this.uniforms.f2.value = this.planeDistance;
     }
 
-    // Pass camera rotation matrix directly to shader
-    // Get the full rotation matrix from camera quaternion
-    const cameraMatrix = new THREE.Matrix4();
-    cameraMatrix.makeRotationFromQuaternion(camera.quaternion);
-    const R = new THREE.Matrix3().setFromMatrix4(cameraMatrix);
-
-    // Both THREE.js Matrix3 and GLSL mat3 are column-major, so direct copy works
-    // THREE.js will upload the matrix elements in the correct order for GLSL
-    this.uniforms.uFaceRotation.value.copy(R);
+    // PHASE 2: Camera rotation in camera-local space is identity (canvas is camera child)
+    // The camera has no rotation relative to itself
+    this.uniforms.uFaceRotation.value.identity();
 
     // Still set legacy uniforms for compatibility (though shader now uses uFaceRotation)
     this.uniforms.sk2.value.set(0, 0);
@@ -522,6 +557,50 @@ export class RaycastPlane extends THREE.Mesh {
    */
   public setFeathering(amount: number): void {
     this.uniforms.feathering.value = amount;
+  }
+
+  /**
+   * Debug: Log all shader uniforms (call from 'U' key handler)
+   */
+  public logUniforms(): void {
+    console.log('=== RaycastPlane Shader Uniforms ===');
+    console.log('Viewport:');
+    console.log('  iResOriginal:', this.uniforms.iResOriginal.value.toArray());
+    console.log('  oRes:', this.uniforms.oRes.value.toArray());
+    console.log('  uTime:', this.uniforms.uTime.value);
+
+    console.log('\nCamera (Face):');
+    console.log('  uFacePosition:', this.uniforms.uFacePosition.value.toArray());
+    console.log('  uFaceRotation:', this.uniforms.uFaceRotation.value.elements);
+    console.log('  sk2:', this.uniforms.sk2.value.toArray());
+    console.log('  sl2:', this.uniforms.sl2.value.toArray());
+    console.log('  roll2:', this.uniforms.roll2.value);
+    console.log('  f2:', this.uniforms.f2.value);
+
+    console.log('\nProjector (View):');
+    console.log('  World Position:', (this as any)._debugProjectorWorldPos?.toArray() || 'N/A');
+    console.log('  Camera-Local Position (before Z-flip):', (this as any)._debugProjectorCameraPos?.toArray() || 'N/A');
+    console.log('  Shader Position (uViewPosition, after Z-flip):', this.uniforms.uViewPosition.value.toArray());
+    console.log('  uViewRotation:', this.uniforms.uViewRotation.value.elements);
+    console.log('  sk1:', this.uniforms.sk1.value.toArray());
+    console.log('  sl1:', this.uniforms.sl1.value.toArray());
+    console.log('  roll1:', this.uniforms.roll1.value);
+    console.log('  uNumLayers:', this.uniforms.uNumLayers.value);
+
+    console.log('\nLayers:');
+    for (let i = 0; i < this.uniforms.uNumLayers.value; i++) {
+      console.log(`  Layer ${i}:`);
+      console.log('    uImage:', this.uniforms.uImage.value[i] ? 'Texture' : 'null');
+      console.log('    uDisparityMap:', this.uniforms.uDisparityMap.value[i] ? 'Texture' : 'null');
+      console.log('    f1:', this.uniforms.f1.value[i]);
+      console.log('    iRes:', this.uniforms.iRes.value[i].toArray());
+      console.log('    invZmin:', this.uniforms.invZmin.value[i]);
+      console.log('    invZmax:', this.uniforms.invZmax.value[i]);
+    }
+
+    console.log('\nVisual:');
+    console.log('  feathering:', this.uniforms.feathering.value);
+    console.log('  background:', this.uniforms.background.value);
   }
 
   /**

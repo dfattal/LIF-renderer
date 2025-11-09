@@ -29,6 +29,7 @@
     FPS: <span id="fps">60</span><br>
     Points: <span id="point-count">0</span><br>
     Mode: <span id="mode">Free Camera</span><br>
+    <span id="orbit-center-display" style="display: none;">Orbit: <span id="orbit-center-pos">(0.000, 0.000, 0.000)</span><br></span>
     Pos: <span id="camera-pos">(0.000, 0.000, 0.000)</span><br>
     Fwd: <span id="camera-forward">(0.000, 0.000, -1.000)</span><br>
     <div style="margin-top: 10px;">
@@ -70,14 +71,10 @@
       <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Main View:</div>
       <div>Size: <span id="main-width">-</span> × <span id="main-height">-</span> px</div>
       <div>Focal: <span id="main-focal">-</span> px</div>
-      <div>f1/width: <span id="main-focal-ratio">-</span></div>
 
       <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Layer 0:</div>
       <div>Size: <span id="layer0-width">-</span> × <span id="layer0-height">-</span> px</div>
       <div>Focal: <span id="layer0-focal">-</span> px</div>
-
-      <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Render Camera:</div>
-      <div>f2/planeWidth: <span id="camera-focal-ratio">-</span></div>
 
       <div style="font-weight: bold; margin-top: 8px; margin-bottom: 3px;">Depth Range:</div>
       <div>invZ min: <span id="view-invz-min">-</span></div>
@@ -98,7 +95,7 @@
       60,
       window.innerWidth / window.innerHeight,
       0.0001,
-      5000
+      1e7  // Far plane at 10 million units to render distant raycast plane
     );
     camera.position.set(0, 0, 0);
 
@@ -391,10 +388,15 @@
 
       // Create red sphere at hit point
       const markerGeometry = new THREE.SphereGeometry(0.02, 16, 16);
-      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+      const markerMaterial = new THREE.MeshBasicMaterial({
+        color: 0xff0000,
+        depthTest: true,
+        depthWrite: true
+      });
       hitMarker = new THREE.Mesh(markerGeometry, markerMaterial);
       hitMarker.position.copy(position);
       hitMarker.visible = hitMarkerVisible;
+      hitMarker.renderOrder = 1; // Render after most objects but before UI
       scene.add(hitMarker);
     }
 
@@ -424,6 +426,17 @@
 
     // Function to update controls based on mode
     function updateControls(mode) {
+      // Show/hide orbit center display
+      const orbitCenterDisplay = document.getElementById('orbit-center-display');
+      if (mode === 'orbit') {
+        orbitCenterDisplay.style.display = 'inline';
+        // Update orbit center position
+        const orbitCenterPos = document.getElementById('orbit-center-pos');
+        orbitCenterPos.textContent = `(${orbitCenter.x.toFixed(3)}, ${orbitCenter.y.toFixed(3)}, ${orbitCenter.z.toFixed(3)})`;
+      } else {
+        orbitCenterDisplay.style.display = 'none';
+      }
+
       if (mode === 'free') {
         if (isMobile) {
           controlsElement.innerHTML =
@@ -528,6 +541,45 @@
         case 'KeyM':
           // Legacy: 'M' key now does nothing (use 'L' for LDI mode toggle)
           console.log("'M' key is no longer used. Press 'L' to toggle LDI mode.");
+          break;
+        case 'KeyU':
+          // Debug: Log all shader uniforms
+          let foundPlane = false;
+          // Search in scene (including camera children)
+          camera.traverse((obj) => {
+            if (obj.name === 'RaycastPlane') {
+              console.log('=== RaycastPlane Debug ===');
+              console.log('Position (local):', obj.position.toArray());
+              console.log('Position (world):', obj.getWorldPosition(new THREE.Vector3()).toArray());
+              console.log('Rotation:', obj.rotation.toArray().slice(0, 3));
+              console.log('Visible:', obj.visible);
+              console.log('Geometry:', obj.geometry.type,
+                'vertices:', obj.geometry.attributes.position?.count || 0);
+              console.log('Material:', obj.material.type,
+                'transparent:', obj.material.transparent,
+                'opacity:', obj.material.opacity);
+              console.log('RenderOrder:', obj.renderOrder);
+              console.log('Parent:', obj.parent?.type || 'none');
+
+              if (typeof obj.logUniforms === 'function') {
+                obj.logUniforms();
+              }
+              foundPlane = true;
+            }
+          });
+          if (!foundPlane) {
+            console.log('RaycastPlane not found in camera hierarchy');
+            // Also check scene just in case
+            scene.traverse((obj) => {
+              if (obj.name === 'RaycastPlane') {
+                console.log('Found RaycastPlane in scene (not camera)');
+                foundPlane = true;
+              }
+            });
+            if (!foundPlane) {
+              console.log('RaycastPlane not found anywhere!');
+            }
+          }
           break;
         case 'KeyG':
           // Toggle gradient filter
@@ -1191,48 +1243,15 @@
         // Store stereo_render_data globally for RaycastPlane
         window.lifStereoRenderData = result.stereo_render_data;
 
-        // Calculate orbit centers for all views if stereo_render_data exists
+        // Calculate orbit centers for all views
+        // Note: result.orbitCenter is the orbit center for view 0, calculated in LifLoader.ts
+        // For now, we only support orbit center for view 0 (first view)
         viewOrbitCenters = new Array(result.projectors.length).fill(null);
 
-        if (result.stereo_render_data) {
-          const stereoData = result.stereo_render_data;
-          const invd = stereoData.invd ?? stereoData.inv_convergence_distance;
-
-          if (invd && invd !== 0) {
-            // Calculate orbit center for each view
-            result.projectors.forEach((proj, index) => {
-              // Get frustum skew from the view (via the original views data if available)
-              // For simplicity, we'll calculate it directly here
-              const baselineMeters = proj.invDepthRange.baseline || 1.0;
-              const convergenceDepth = baselineMeters / invd;
-
-              const fx = proj.intrinsics.fx;
-              const fy = proj.intrinsics.fy;
-              const cx = proj.intrinsics.cx;
-              const cy = proj.intrinsics.cy;
-
-              // Assume centered frustum (sk.x = 0, sk.y = 0) for now
-              // The point is at (cx, cy) which is the center
-              const px = cx;
-              const py = cy;
-
-              // Calculate 3D point in projector space (at the center ray)
-              const X = (px - cx) * convergenceDepth / fx; // = 0
-              const Y = (py - cy) * convergenceDepth / fy; // = 0
-              const Z = -convergenceDepth;
-
-              // Create point in projector local space
-              const localPoint = new THREE.Vector3(X, Y, Z);
-
-              // Transform to world space
-              proj.updateMatrixWorld();
-              const worldPoint = localPoint.applyMatrix4(proj.matrixWorld);
-
-              viewOrbitCenters[index] = worldPoint;
-
-              console.log(`View ${index} orbit center:`, worldPoint);
-            });
-          }
+        if (result.orbitCenter) {
+          // Use the properly calculated orbit center from LifLoader for view 0
+          viewOrbitCenters[0] = result.orbitCenter.clone();
+          console.log('View 0 orbit center from LifLoader:', result.orbitCenter);
         }
 
         // Remove old projector from scene
@@ -1354,8 +1373,6 @@
           document.getElementById('main-height').textContent = proj.height;
           const mainFocal = proj.intrinsics.fx;
           document.getElementById('main-focal').textContent = mainFocal.toFixed(2);
-          const mainFocalRatio = mainFocal / proj.width;
-          document.getElementById('main-focal-ratio').textContent = mainFocalRatio.toFixed(4);
 
           // Layer 0 (if available)
           if (proj.lifLayers && proj.lifLayers.length > 0) {
@@ -1368,9 +1385,6 @@
             document.getElementById('layer0-height').textContent = '-';
             document.getElementById('layer0-focal').textContent = '-';
           }
-
-          // Render Camera (will be updated in animation loop)
-          document.getElementById('camera-focal-ratio').textContent = '-';
 
           // Depth Range (using main view invDepthRange)
           document.getElementById('view-invz-min').textContent = proj.invDepthRange.min.toFixed(6);
@@ -1434,13 +1448,10 @@
         document.getElementById('view-rot').textContent =
           `(${quat.x.toFixed(3)}, ${quat.y.toFixed(3)}, ${quat.z.toFixed(3)}, ${quat.w.toFixed(3)})`;
 
-        document.getElementById('view-fx').textContent = selectedProjector.intrinsics.fx.toFixed(2);
-        document.getElementById('view-fy').textContent = selectedProjector.intrinsics.fy.toFixed(2);
-        document.getElementById('view-cx').textContent = selectedProjector.intrinsics.cx.toFixed(2);
-        document.getElementById('view-cy').textContent = selectedProjector.intrinsics.cy.toFixed(2);
         document.getElementById('view-invz-min').textContent = selectedProjector.invDepthRange.min.toFixed(6);
         document.getElementById('view-invz-max').textContent = selectedProjector.invDepthRange.max.toFixed(6);
-        document.getElementById('view-baseline').textContent = (selectedProjector.invDepthRange.baseline || 1.0).toFixed(4);
+        const baseline_mm = (selectedProjector.invDepthRange.baseline || 1.0) * 1000;
+        document.getElementById('view-baseline').textContent = baseline_mm.toFixed(2);
 
         // Update point count
         const pointCount = selectedProjector.width * selectedProjector.height;
@@ -1480,21 +1491,10 @@
         document.getElementById('camera-forward').textContent =
           `(${forward.x.toFixed(3)}, ${forward.y.toFixed(3)}, ${forward.z.toFixed(3)})`;
 
-        // Update camera focal ratio (f2 / planeWidth) if RaycastPlane exists
-        let raycastPlane = null;
-        scene.traverse((obj) => {
-          if (obj.constructor.name === 'RaycastPlane') {
-            raycastPlane = obj;
-          }
-        });
-
-        if (raycastPlane && raycastPlane.uniforms) {
-          const f2 = raycastPlane.uniforms.f2.value;
-          const planeWidth = raycastPlane.uniforms.oRes.value.x;
-          if (planeWidth > 0) {
-            const cameraFocalRatio = f2 / planeWidth;
-            document.getElementById('camera-focal-ratio').textContent = cameraFocalRatio.toFixed(4);
-          }
+        // Update orbit center display if in orbit mode
+        if (isOrbitMode) {
+          const orbitCenterPos = document.getElementById('orbit-center-pos');
+          orbitCenterPos.textContent = `(${orbitCenter.x.toFixed(3)}, ${orbitCenter.y.toFixed(3)}, ${orbitCenter.z.toFixed(3)})`;
         }
       }
 
