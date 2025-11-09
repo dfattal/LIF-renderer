@@ -105,6 +105,16 @@ mat3 matFromFocal(vec2 fxy) {
 
 mat3 flipZ = mat3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0); // flip Z axis
 
+// Linear to sRGB conversion (gamma correction)
+vec3 linearTosRGB(vec3 linear) {
+    // sRGB standard gamma curve
+    vec3 sRGB;
+    sRGB.r = (linear.r <= 0.0031308) ? linear.r * 12.92 : 1.055 * pow(linear.r, 1.0/2.4) - 0.055;
+    sRGB.g = (linear.g <= 0.0031308) ? linear.g * 12.92 : 1.055 * pow(linear.g, 1.0/2.4) - 0.055;
+    sRGB.b = (linear.b <= 0.0031308) ? linear.b * 12.92 : 1.055 * pow(linear.b, 1.0/2.4) - 0.055;
+    return sRGB;
+}
+
 #ifdef GL_ES
 // Matrix Math
 float det(mat2 matrix) {
@@ -346,6 +356,9 @@ void main(void) {
         // Blend with the background
         result.rgb = background.rgb * background.a * (1.0 - result.a) + result.rgb;
         result.a = background.a + result.a * (1.0 - background.a); // Blend alpha
+
+        // Apply gamma correction (linear to sRGB conversion)
+        result.rgb = linearTosRGB(result.rgb);
 
         gl_FragColor = result;
 
