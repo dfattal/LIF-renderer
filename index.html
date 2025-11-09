@@ -1419,7 +1419,18 @@
         // Wait for the projector to be fully initialized (textures loaded)
         await selectedProjector.initialized;
 
-        // Now swap the projectors - textures are ready
+        // Update RaycastPlane with new projector data FIRST (if in raycast mode)
+        // This ensures textures are loaded before we swap projectors
+        const holoRenderer = findHoloRenderer();
+        if (holoRenderer && holoRenderer.getRenderMode() === 'raytracing') {
+          // Access the raycast plane and update its projector data
+          if (holoRenderer.raycastPlane) {
+            await holoRenderer.raycastPlane.updateProjectorData(selectedProjector);
+            console.log('Updated RaycastPlane with new projector textures');
+          }
+        }
+
+        // Now swap the projectors in the scene - textures are already loaded
         scene.remove(projector);
         scene.add(selectedProjector);
 

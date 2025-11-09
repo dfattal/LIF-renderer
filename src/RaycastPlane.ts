@@ -439,6 +439,27 @@ export class RaycastPlane extends THREE.Mesh {
   }
 
   /**
+   * Update the projector data (textures and intrinsics) when switching views
+   * This allows changing which view is being rendered without recreating the RaycastPlane
+   */
+  public async updateProjectorData(projector: HoloProjector): Promise<void> {
+    if (!projector || !projector.lifLayers || projector.lifLayers.length === 0) {
+      console.warn('RaycastPlane: Invalid projector or no layers');
+      return;
+    }
+
+    this.projector = projector;
+
+    // Reload textures for the new projector's layers
+    await this.loadLayerTextures(projector.lifLayers);
+
+    // Update static uniforms with new projector data
+    this.updateStaticUniforms();
+
+    console.log('RaycastPlane: Updated to new projector data');
+  }
+
+  /**
    * Update projector pose uniforms in camera-local coordinates
    * Transforms projector world-space pose to camera-local space
    */

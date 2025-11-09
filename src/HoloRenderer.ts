@@ -40,7 +40,7 @@ export class HoloRenderer extends THREE.Mesh {
   private connectedMeshGeometry: THREE.BufferGeometry | null = null;
 
   // Raytracing rendering
-  private raycastPlane: RaycastPlane | null = null;
+  public raycastPlane: RaycastPlane | null = null; // Public to allow texture updates when switching views
   private renderCameraChildren: boolean = false;
 
   static EMPTY_TEXTURE = new THREE.Texture();
