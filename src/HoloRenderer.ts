@@ -44,8 +44,8 @@ export class HoloRenderer extends THREE.Mesh {
   private renderCameraChildren: boolean = false;
 
   // XR rendering (per-eye raycast planes)
-  private raycastPlaneLeft: RaycastPlane | null = null;
-  private raycastPlaneRight: RaycastPlane | null = null;
+  public raycastPlaneLeft: RaycastPlane | null = null; // Public to allow mode switching
+  public raycastPlaneRight: RaycastPlane | null = null; // Public to allow mode switching
   private isXRInitialized: boolean = false;
 
   static EMPTY_TEXTURE = new THREE.Texture();
@@ -367,9 +367,19 @@ export class HoloRenderer extends THREE.Mesh {
         const stereoData = (window as any).lifStereoRenderData;
         const invd = stereoData ? (stereoData.invd ?? stereoData.inv_convergence_distance) : undefined;
 
+        // Check if desktop plane is in stereo mode
+        const desktopInStereoMode = this.raycastPlane && this.raycastPlane.getViewMode() === 'stereo';
+
         // Create left eye plane
         this.raycastPlaneLeft = new RaycastPlane(1, 1);
         await this.raycastPlaneLeft.initializeFromProjector(projectors, invd);
+
+        // If desktop is in stereo mode and we have 2+ projectors, switch VR plane to stereo
+        if (desktopInStereoMode && projectors.length >= 2) {
+          await this.raycastPlaneLeft.toggleViewMode();
+          console.log('VR left eye plane: Initialized in STEREO mode (using both views)');
+        }
+
         this.raycastPlaneLeft.updatePlaneSizeFromCamera(leftCamera, 'LEFT EYE');
 
         // Set layer to 1 for left eye only
@@ -387,6 +397,13 @@ export class HoloRenderer extends THREE.Mesh {
         // Create right eye plane
         this.raycastPlaneRight = new RaycastPlane(1, 1);
         await this.raycastPlaneRight.initializeFromProjector(projectors, invd);
+
+        // If desktop is in stereo mode and we have 2+ projectors, switch VR plane to stereo
+        if (desktopInStereoMode && projectors.length >= 2) {
+          await this.raycastPlaneRight.toggleViewMode();
+          console.log('VR right eye plane: Initialized in STEREO mode (using both views)');
+        }
+
         this.raycastPlaneRight.updatePlaneSizeFromCamera(rightCamera, 'RIGHT EYE');
 
         // Set layer to 2 for right eye only

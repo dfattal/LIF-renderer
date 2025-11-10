@@ -571,6 +571,17 @@
             const newMode = await holoRenderer5.raycastPlane.toggleViewMode();
             const projectorCount = holoRenderer5.raycastPlane.getProjectorCount();
 
+            // Also toggle VR planes if they exist
+            if (renderer.xr.isPresenting) {
+              if (holoRenderer5.raycastPlaneLeft) {
+                await holoRenderer5.raycastPlaneLeft.toggleViewMode();
+              }
+              if (holoRenderer5.raycastPlaneRight) {
+                await holoRenderer5.raycastPlaneRight.toggleViewMode();
+              }
+              console.log(`VR planes switched to ${newMode.toUpperCase()} mode`);
+            }
+
             if (newMode === 'stereo' && projectorCount >= 2) {
               console.log('Switched to STEREO raycast mode (using both views)');
               // Hide view selector in stereo mode
