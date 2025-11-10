@@ -1589,6 +1589,19 @@
           }
         });
 
+        // Hide desktop raycast plane in VR mode
+        const holoRenderer = findHoloRenderer();
+        if (holoRenderer && holoRenderer.raycastPlane) {
+          holoRenderer.raycastPlane.visible = false;
+          console.log('Desktop raycast plane hidden for VR mode');
+        }
+
+        // Hide orbit marker in VR mode
+        if (hitMarker) {
+          hitMarker.visible = false;
+          console.log('Orbit marker hidden for VR mode');
+        }
+
         // Update button state
         const xrButton = document.getElementById('xr-button');
         const xrStatus = document.getElementById('xr-status');
@@ -1600,6 +1613,24 @@
         // Handle session end
         xrSession.addEventListener('end', () => {
           cleanupControllers();
+
+          // Clean up XR raycast planes
+          const holoRenderer = findHoloRenderer();
+          if (holoRenderer) {
+            holoRenderer.cleanupXR();
+
+            // Restore desktop raycast plane visibility
+            if (holoRenderer.raycastPlane) {
+              holoRenderer.raycastPlane.visible = true;
+              console.log('Desktop raycast plane restored');
+            }
+          }
+
+          // Restore orbit marker visibility (if it was visible before)
+          if (hitMarker && hitMarkerVisible) {
+            hitMarker.visible = true;
+            console.log('Orbit marker restored');
+          }
 
           // Show axes helpers again when exiting VR
           scene.traverse((obj) => {

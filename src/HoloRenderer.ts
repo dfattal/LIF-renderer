@@ -338,68 +338,93 @@ export class HoloRenderer extends THREE.Mesh {
     const leftCamera = xrCamera.cameras[0];
     const rightCamera = xrCamera.cameras[1];
 
-    // Initialize per-eye raycast planes on first XR frame
-    if (!this.isXRInitialized) {
-      console.log('Initializing XR raycast planes...');
+    // Set camera layers for per-eye rendering
+    // Disable default layer 0 and only enable the eye-specific layer
+    leftCamera.layers.disableAll();
+    leftCamera.layers.enable(1); // Left eye sees only layer 1
 
-      // Get invd from global stereo_render_data if available
-      const stereoData = (window as any).lifStereoRenderData;
-      const invd = stereoData ? (stereoData.invd ?? stereoData.inv_convergence_distance) : undefined;
+    rightCamera.layers.disableAll();
+    rightCamera.layers.enable(2); // Right eye sees only layer 2
 
-      // Create left eye plane
-      this.raycastPlaneLeft = new RaycastPlane(1, 1);
-      await this.raycastPlaneLeft.initializeFromProjector(projectors, invd);
-      this.raycastPlaneLeft.updatePlaneSizeFromCamera(leftCamera);
-      leftCamera.add(this.raycastPlaneLeft);
-
-      const planeDistanceLeft = this.raycastPlaneLeft.planeDistance;
-      this.raycastPlaneLeft.position.set(0, 0, -planeDistanceLeft);
-      this.raycastPlaneLeft.quaternion.identity();
-
-      // Create right eye plane
-      this.raycastPlaneRight = new RaycastPlane(1, 1);
-      await this.raycastPlaneRight.initializeFromProjector(projectors, invd);
-      this.raycastPlaneRight.updatePlaneSizeFromCamera(rightCamera);
-      rightCamera.add(this.raycastPlaneRight);
-
-      const planeDistanceRight = this.raycastPlaneRight.planeDistance;
-      this.raycastPlaneRight.position.set(0, 0, -planeDistanceRight);
-      this.raycastPlaneRight.quaternion.identity();
-
-      this.isXRInitialized = true;
-      console.log(`XR raycast planes initialized at distances: L=${planeDistanceLeft}, R=${planeDistanceRight}`);
-    }
-
-    // Update camera matrices
+    // Update world matrices (projection matrices are set by WebXR, don't modify them)
     leftCamera.updateMatrixWorld();
     rightCamera.updateMatrixWorld();
 
-    // Update left eye projector poses and uniforms
-    if (this.raycastPlaneLeft) {
+    // Initialize per-eye raycast planes on first XR frame
+    if (!this.raycastPlaneLeft || !this.raycastPlaneRight) {
+      // Only initialize if planes don't exist yet
+      if (!this.isXRInitialized) {
+        // Set flag immediately to prevent re-initialization on subsequent frames during async operations
+        this.isXRInitialized = true;
+        console.log('Initializing XR raycast planes...');
+
+        // Get invd from global stereo_render_data if available
+        const stereoData = (window as any).lifStereoRenderData;
+        const invd = stereoData ? (stereoData.invd ?? stereoData.inv_convergence_distance) : undefined;
+
+        // Create left eye plane
+        this.raycastPlaneLeft = new RaycastPlane(1, 1);
+        await this.raycastPlaneLeft.initializeFromProjector(projectors, invd);
+        this.raycastPlaneLeft.updatePlaneSizeFromCamera(leftCamera, 'LEFT EYE');
+
+        // Set layer to 1 for left eye only
+        this.raycastPlaneLeft.layers.set(1);
+        this.raycastPlaneLeft.traverse((obj) => obj.layers.set(1));
+
+        leftCamera.add(this.raycastPlaneLeft);
+
+        const planeDistanceLeft = this.raycastPlaneLeft.planeDistance;
+        this.raycastPlaneLeft.position.set(0, 0, -planeDistanceLeft);
+        this.raycastPlaneLeft.quaternion.identity();
+
+        // Create right eye plane
+        this.raycastPlaneRight = new RaycastPlane(1, 1);
+        await this.raycastPlaneRight.initializeFromProjector(projectors, invd);
+        this.raycastPlaneRight.updatePlaneSizeFromCamera(rightCamera, 'RIGHT EYE');
+
+        // Set layer to 2 for right eye only
+        this.raycastPlaneRight.layers.set(2);
+        this.raycastPlaneRight.traverse((obj) => obj.layers.set(2));
+
+        rightCamera.add(this.raycastPlaneRight);
+
+        const planeDistanceRight = this.raycastPlaneRight.planeDistance;
+        this.raycastPlaneRight.position.set(0, 0, -planeDistanceRight);
+        this.raycastPlaneRight.quaternion.identity();
+
+        console.log(`XR raycast planes initialized at distances: L=${planeDistanceLeft}, R=${planeDistanceRight}`);
+      }
+      // If we're here but isXRInitialized is true, it means async init is in progress, skip this frame
+      return;
+    }
+
+    // Determine which eye is currently being rendered by checking which camera matches
+    const isLeftEye = camera === leftCamera;
+    const isRightEye = camera === rightCamera;
+
+    if (!isLeftEye && !isRightEye) {
+      console.warn('XR: Camera does not match left or right eye!');
+      return;
+    }
+
+    // Update and render only the plane for the current eye
+    if (isLeftEye && this.raycastPlaneLeft) {
       this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
       this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
-    }
 
-    // Update right eye projector poses and uniforms
-    if (this.raycastPlaneRight) {
+      const oldAutoClear = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.render(this.raycastPlaneLeft, leftCamera);
+      renderer.autoClear = oldAutoClear;
+    } else if (isRightEye && this.raycastPlaneRight) {
       this.raycastPlaneRight.updateProjectorPoses(rightCamera);
       this.raycastPlaneRight.updateDynamicUniforms(rightCamera, renderer);
-    }
 
-    // Manual rendering for each eye
-    // THREE.js XR handles stereo rendering automatically, but we need to manually render camera children
-    const oldAutoClear = renderer.autoClear;
-    renderer.autoClear = false;
-
-    if (this.raycastPlaneLeft) {
-      renderer.render(this.raycastPlaneLeft, leftCamera);
-    }
-
-    if (this.raycastPlaneRight) {
+      const oldAutoClear = renderer.autoClear;
+      renderer.autoClear = false;
       renderer.render(this.raycastPlaneRight, rightCamera);
+      renderer.autoClear = oldAutoClear;
     }
-
-    renderer.autoClear = oldAutoClear;
 
     // Hide the mesh geometry when in XR raytracing mode
     if (this.geometry !== new THREE.BufferGeometry()) {
@@ -592,11 +617,34 @@ export class HoloRenderer extends THREE.Mesh {
     return this.uniforms.showDepth.value > 0.5;
   }
 
+  /**
+   * Clean up XR raycast planes when exiting VR mode
+   */
+  public cleanupXR(): void {
+    if (this.raycastPlaneLeft) {
+      this.raycastPlaneLeft.removeFromParent();
+      this.raycastPlaneLeft.dispose();
+      this.raycastPlaneLeft = null;
+    }
+
+    if (this.raycastPlaneRight) {
+      this.raycastPlaneRight.removeFromParent();
+      this.raycastPlaneRight.dispose();
+      this.raycastPlaneRight = null;
+    }
+
+    this.isXRInitialized = false;
+    console.log('XR raycast planes cleaned up');
+  }
+
   dispose(): void {
     if (this.raycastPlane) {
       this.raycastPlane.dispose();
       this.raycastPlane = null;
     }
+
+    // Clean up XR planes
+    this.cleanupXR();
 
     if (this.connectedMeshGeometry) {
       this.connectedMeshGeometry.dispose();

@@ -292,42 +292,59 @@ export class RaycastPlane extends THREE.Mesh {
    * Update plane size to match camera FOV at the current distance
    * Call this on initialization and window resize
    */
-  public updatePlaneSizeFromCamera(camera: THREE.Camera): void {
+  public updatePlaneSizeFromCamera(camera: THREE.Camera, eyeLabel?: string): void {
     if (!this.projector) return;
+
+    let fovRadians: number;
+    let aspect: number;
+
+    // For XR cameras (identified by eyeLabel), always extract from projection matrix
+    // For regular desktop cameras, use direct properties
+    if (eyeLabel) {
+      // XR camera - extract from projection matrix
+      // For symmetric perspective: m[5] = 1 / tan(vFOV/2)
+      const m = camera.projectionMatrix.elements;
+      console.log(`${eyeLabel}: Projection matrix m[0]=${m[0].toFixed(4)}, m[5]=${m[5].toFixed(4)}`);
+      fovRadians = 2 * Math.atan(1 / m[5]);
+      aspect = m[5] / m[0];
+      console.log(`${eyeLabel}: Extracted from projection matrix (vFOV=${THREE.MathUtils.radToDeg(fovRadians).toFixed(1)}°, aspect=${aspect.toFixed(2)})`);
+    } else {
+      // Regular perspective camera with direct FOV property (desktop mode)
+      const perspCam = camera as THREE.PerspectiveCamera;
+      fovRadians = THREE.MathUtils.degToRad(perspCam.fov);
+      aspect = perspCam.aspect;
+    }
 
     // Calculate plane size based on camera FOV at plane distance
     // Formula: size = 2 * distance * tan(fov / 2)
-    if ((camera as THREE.PerspectiveCamera).fov) {
-      const fovRadians = THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov);
-      const aspect = (camera as THREE.PerspectiveCamera).aspect;
+    const planeHeight = 2 * this.planeDistance * Math.tan(fovRadians / 2);
+    const planeWidth = planeHeight * aspect;
 
-      const planeHeight = 2 * this.planeDistance * Math.tan(fovRadians / 2);
-      const planeWidth = planeHeight * aspect;
+    // Update the plane geometry to match
+    const newGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+    this.geometry.dispose();
+    this.geometry = newGeometry;
 
-      // Update the plane geometry to match
-      const newGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
-      this.geometry.dispose();
-      this.geometry = newGeometry;
+    // Recreate the border with new geometry
+    const children = this.children.filter(c => c.type === 'LineSegments');
+    children.forEach(c => {
+      this.remove(c);
+      (c as any).geometry?.dispose();
+    });
+    const borderGeometry = new THREE.EdgesGeometry(newGeometry);
+    const borderMaterial = new THREE.LineBasicMaterial({
+      color: 0xff0000,
+      linewidth: 5,
+      depthTest: false,
+      depthWrite: false
+    });
+    const border = new THREE.LineSegments(borderGeometry, borderMaterial);
+    border.renderOrder = 999;
+    this.add(border);
 
-      // Recreate the border with new geometry
-      const children = this.children.filter(c => c.type === 'LineSegments');
-      children.forEach(c => {
-        this.remove(c);
-        (c as any).geometry?.dispose();
-      });
-      const borderGeometry = new THREE.EdgesGeometry(newGeometry);
-      const borderMaterial = new THREE.LineBasicMaterial({
-        color: 0xff0000,
-        linewidth: 5,
-        depthTest: false,
-        depthWrite: false
-      });
-      const border = new THREE.LineSegments(borderGeometry, borderMaterial);
-      border.renderOrder = 999;
-      this.add(border);
-
-      console.log(`RaycastPlane: Plane size updated (${planeWidth.toFixed(2)}m x ${planeHeight.toFixed(2)}m at ${this.planeDistance.toFixed(2)}m)`);
-    }
+    const eyeInfo = eyeLabel ? ` [${eyeLabel}]` : '';
+    const fovDeg = THREE.MathUtils.radToDeg(fovRadians);
+    console.log(`RaycastPlane${eyeInfo}: Canvas plane size ${planeWidth.toFixed(2)}m x ${planeHeight.toFixed(2)}m at distance ${this.planeDistance.toFixed(2)}m (FOV: ${fovDeg.toFixed(1)}°, aspect: ${aspect.toFixed(2)})`);
   }
 
   /**
