@@ -21,6 +21,14 @@
       z-index: 100;
     }
   </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.173.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.173.0/examples/jsm/"
+      }
+    }
+  </script>
 </head>
 
 <body>
@@ -63,6 +71,15 @@
       </label>
     </div>
 
+    <div id="xr-container" style="margin-top: 15px; display: none;">
+      <button id="xr-button" style="width: 100%; background: #0066ff; color: white; border: none; padding: 10px; border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: bold;">
+        Enter VR
+      </button>
+      <div id="xr-status" style="margin-top: 8px; font-size: 11px; color: #aaa; text-align: center;">
+        XR Ready
+      </div>
+    </div>
+
     <div id="view-info" style="margin-top: 15px; font-size: 11px; line-height: 1.4; border-top: 1px solid #555; padding-top: 10px; display: none;">
       <div style="font-weight: bold; margin-bottom: 5px;">Projector Pose:</div>
       <div>Pos: <span id="view-pos">-</span></div>
@@ -84,7 +101,8 @@
   </div>
 
   <script type="module">
-    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.173.0/build/three.module.js";
+    import * as THREE from "three";
+    import { XRControllerModelFactory } from "three/addons/webxr/XRControllerModelFactory.js";
     import { HoloProjector, HoloRenderer, loadLifFile } from "./src/index.ts";
 
     // Scene setup
@@ -104,6 +122,9 @@
     renderer.setClearColor(0x111111);
     renderer.outputColorSpace = THREE.SRGBColorSpace; // Match monitor color space
     document.body.appendChild(renderer.domElement);
+
+    // Enable XR support
+    renderer.xr.enabled = true;
 
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
@@ -151,6 +172,10 @@
     let loadedProjectors = [];
     // Store orbit center for each view (indexed by view index)
     let viewOrbitCenters = [];
+
+    // XR camera height tracking
+    let initialY = null;
+    const INITIAL_Y_MIN_THRESHOLD = 0.5; // Minimum 0.5m to avoid invalid readings
 
     // Add helpers
     const axesHelper = new THREE.AxesHelper(0.5);
@@ -1499,6 +1524,237 @@
       }
     });
 
+    // WebXR Session Management
+    let xrSession = null;
+    let xrRefSpace = null;
+    let controller1 = null;
+    let controller2 = null;
+    let controllerGrip1 = null;
+    let controllerGrip2 = null;
+
+    // Check for XR support and show button if available
+    async function setupXR() {
+      if (!navigator.xr) {
+        console.log('WebXR not supported in this browser');
+        return;
+      }
+
+      try {
+        const supported = await navigator.xr.isSessionSupported('immersive-vr');
+        if (supported) {
+          document.getElementById('xr-container').style.display = 'block';
+          console.log('WebXR VR mode supported!');
+        } else {
+          console.log('Immersive VR not supported');
+        }
+      } catch (err) {
+        console.error('Error checking XR support:', err);
+      }
+    }
+
+    // Start XR session
+    async function startXRSession() {
+      if (!navigator.xr) return;
+
+      try {
+        // Request immersive-vr session with no required features (for maximum compatibility)
+        xrSession = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local', 'local-floor', 'hand-tracking', 'layers']
+        });
+
+        // Set up XR rendering
+        await renderer.xr.setSession(xrSession);
+
+        // Try to get reference space with fallback chain
+        try {
+          xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
+          console.log('Using local-floor reference space');
+        } catch (e) {
+          try {
+            xrRefSpace = await xrSession.requestReferenceSpace('local');
+            console.log('Using local reference space');
+          } catch (e2) {
+            xrRefSpace = await xrSession.requestReferenceSpace('viewer');
+            console.log('Using viewer reference space (fallback)');
+          }
+        }
+
+        // Setup XR controllers
+        setupControllers();
+
+        // Hide axes helpers in VR mode
+        scene.traverse((obj) => {
+          if (obj instanceof THREE.AxesHelper) {
+            obj.visible = false;
+          }
+        });
+
+        // Update button state
+        const xrButton = document.getElementById('xr-button');
+        const xrStatus = document.getElementById('xr-status');
+        xrButton.textContent = 'Exit VR';
+        xrButton.style.background = '#ff4444';
+        xrStatus.textContent = 'In VR Session';
+        xrStatus.style.color = '#00ff00';
+
+        // Handle session end
+        xrSession.addEventListener('end', () => {
+          cleanupControllers();
+
+          // Show axes helpers again when exiting VR
+          scene.traverse((obj) => {
+            if (obj instanceof THREE.AxesHelper) {
+              obj.visible = true;
+            }
+          });
+
+          xrSession = null;
+          xrRefSpace = null;
+          xrButton.textContent = 'Enter VR';
+          xrButton.style.background = '#0066ff';
+          xrStatus.textContent = 'XR Ready';
+          xrStatus.style.color = '#aaa';
+          console.log('XR session ended');
+        });
+
+        console.log('XR session started successfully');
+      } catch (err) {
+        console.error('Error starting XR session:', err);
+        document.getElementById('xr-status').textContent = 'Error: ' + err.message;
+        document.getElementById('xr-status').style.color = '#ff4444';
+      }
+    }
+
+    // End XR session
+    async function endXRSession() {
+      if (xrSession) {
+        await xrSession.end();
+      }
+    }
+
+    // XR button click handler
+    document.getElementById('xr-button').addEventListener('click', () => {
+      if (xrSession) {
+        endXRSession();
+      } else {
+        startXRSession();
+      }
+    });
+
+    // Initialize XR support check
+    setupXR();
+
+    // XR Controller Setup
+    function setupControllers() {
+      const controllerModelFactory = new XRControllerModelFactory();
+
+      // Controller 1 (usually right hand)
+      controller1 = renderer.xr.getController(0);
+      controller1.addEventListener('selectstart', onSelectStart);
+      controller1.addEventListener('selectend', onSelectEnd);
+      controller1.addEventListener('select', onSelect);
+      scene.add(controller1);
+
+      // Controller 2 (usually left hand)
+      controller2 = renderer.xr.getController(1);
+      controller2.addEventListener('selectstart', onSelectStart);
+      controller2.addEventListener('selectend', onSelectEnd);
+      controller2.addEventListener('select', onSelect);
+      scene.add(controller2);
+
+      // Add visual ray to controllers
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -1)
+      ]);
+      const material = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+
+      const line1 = new THREE.Line(geometry, material);
+      line1.name = 'ray';
+      line1.scale.z = 5; // Ray length
+      controller1.add(line1.clone());
+
+      const line2 = new THREE.Line(geometry, material);
+      line2.name = 'ray';
+      line2.scale.z = 5;
+      controller2.add(line2.clone());
+
+      // Add controller grips with full 3D models
+      controllerGrip1 = renderer.xr.getControllerGrip(0);
+      controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+      scene.add(controllerGrip1);
+
+      controllerGrip2 = renderer.xr.getControllerGrip(1);
+      controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
+      scene.add(controllerGrip2);
+
+      console.log('XR controllers initialized with full 3D models');
+    }
+
+    // Cleanup controllers on session end
+    function cleanupControllers() {
+      if (controller1) {
+        controller1.removeEventListener('selectstart', onSelectStart);
+        controller1.removeEventListener('selectend', onSelectEnd);
+        controller1.removeEventListener('select', onSelect);
+        scene.remove(controller1);
+        controller1 = null;
+      }
+
+      if (controller2) {
+        controller2.removeEventListener('selectstart', onSelectStart);
+        controller2.removeEventListener('selectend', onSelectEnd);
+        controller2.removeEventListener('select', onSelect);
+        scene.remove(controller2);
+        controller2 = null;
+      }
+
+      if (controllerGrip1) {
+        scene.remove(controllerGrip1);
+        controllerGrip1 = null;
+      }
+
+      if (controllerGrip2) {
+        scene.remove(controllerGrip2);
+        controllerGrip2 = null;
+      }
+    }
+
+    // Controller event handlers
+    function onSelectStart(event) {
+      const controller = event.target;
+      controller.userData.isSelecting = true;
+      console.log('Controller select start');
+    }
+
+    function onSelectEnd(event) {
+      const controller = event.target;
+      controller.userData.isSelecting = false;
+      console.log('Controller select end');
+    }
+
+    async function onSelect(event) {
+      const controller = event.target;
+      const holoRenderer = findHoloRenderer();
+
+      if (!holoRenderer || !holoRenderer.raycastPlane) {
+        console.log('No raycast plane available in XR');
+        return;
+      }
+
+      // Toggle mono/stereo mode with trigger
+      const currentMode = holoRenderer.raycastPlane.getViewMode();
+      const projectorCount = holoRenderer.raycastPlane.getProjectorCount();
+
+      if (currentMode === 'mono' && projectorCount >= 2) {
+        await holoRenderer.raycastPlane.toggleViewMode();
+        console.log('XR: Switched to STEREO mode');
+      } else if (currentMode === 'stereo') {
+        await holoRenderer.raycastPlane.toggleViewMode();
+        console.log('XR: Switched to MONO mode');
+      }
+    }
+
     // Animation loop
     let lastTime = 0;
     let frameCount = 0;
@@ -1510,6 +1766,40 @@
       lastTime = time;
       frameCount++;
       fpsFrameCount++;
+
+      // XR camera height tracking - set projector Y once when XR camera is first available
+      if (renderer.xr.isPresenting && initialY === null) {
+        try {
+          const xrCam = renderer.xr.getCamera(camera);
+
+          // Check if XR cameras are available
+          if (xrCam.cameras && xrCam.cameras.length >= 2) {
+            const leftCam = xrCam.cameras[0];
+            const rightCam = xrCam.cameras[1];
+
+            const candidateY = (leftCam.position.y + rightCam.position.y) / 2;
+
+            // Only accept if above threshold (retry until we get valid reading)
+            if (candidateY > INITIAL_Y_MIN_THRESHOLD) {
+              initialY = candidateY;
+              console.log('Initial Y position set to:', initialY.toFixed(3), 'm');
+
+              // Set all projectors Y position to this initial Y (only once)
+              if (projector) {
+                projector.position.y = initialY;
+              }
+
+              loadedProjectors.forEach(p => {
+                p.position.y = initialY;
+              });
+            } else {
+              console.log('InitialY candidate', candidateY.toFixed(3), 'm too low, retrying...');
+            }
+          }
+        } catch (err) {
+          // Silently ignore errors during XR camera access
+        }
+      }
 
       // Update FPS counter and camera position
       if (time - fpsUpdateTime >= 500) {

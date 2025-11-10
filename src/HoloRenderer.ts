@@ -40,8 +40,13 @@ export class HoloRenderer extends THREE.Mesh {
   private connectedMeshGeometry: THREE.BufferGeometry | null = null;
 
   // Raytracing rendering
-  public raycastPlane: RaycastPlane | null = null; // Public to allow texture updates when switching views
+  public raycastPlane: RaycastPlane | null = null; // Public to allow texture updates when switching views (desktop mode)
   private renderCameraChildren: boolean = false;
+
+  // XR rendering (per-eye raycast planes)
+  private raycastPlaneLeft: RaycastPlane | null = null;
+  private raycastPlaneRight: RaycastPlane | null = null;
+  private isXRInitialized: boolean = false;
 
   static EMPTY_TEXTURE = new THREE.Texture();
 
@@ -171,9 +176,15 @@ export class HoloRenderer extends THREE.Mesh {
       const projector = this.activeProjectors[0];
       this.renderMeshProjector(projector, camera);
     } else {
-      // Raytracing mode: pass all projectors for stereo support
+      // Raytracing mode: detect XR and render accordingly
       if (this.activeProjectors[0].lifLayers.length > 0) {
-        this.renderRaycastLayerStereo(this.activeProjectors, camera, renderer, scene);
+        if (renderer.xr.isPresenting) {
+          // XR mode: render per-eye raycast planes
+          this.renderXR(this.activeProjectors, camera, renderer, scene);
+        } else {
+          // Desktop mode: render single raycast plane
+          this.renderRaycastLayerStereo(this.activeProjectors, camera, renderer, scene);
+        }
       } else {
         console.warn("Raytracing mode requires lifLayers to be populated");
       }
@@ -300,6 +311,97 @@ export class HoloRenderer extends THREE.Mesh {
     renderer.autoClear = oldAutoClear;
 
     // Hide the mesh geometry when in raytracing mode
+    if (this.geometry !== new THREE.BufferGeometry()) {
+      this.geometry = new THREE.BufferGeometry();
+    }
+  }
+
+  /**
+   * Render in XR mode with per-eye raycast planes
+   */
+  private async renderXR(
+    projectors: HoloProjector[],
+    camera: THREE.Camera,
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+  ) {
+    // Get XR camera (contains left and right eye cameras)
+    const xrCamera = renderer.xr.getCamera();
+
+    // XR camera contains an array of cameras (left, right for stereo)
+    if (!xrCamera.cameras || xrCamera.cameras.length < 2) {
+      console.warn('XR cameras not available, falling back to desktop rendering');
+      this.renderRaycastLayerStereo(projectors, camera, renderer, scene);
+      return;
+    }
+
+    const leftCamera = xrCamera.cameras[0];
+    const rightCamera = xrCamera.cameras[1];
+
+    // Initialize per-eye raycast planes on first XR frame
+    if (!this.isXRInitialized) {
+      console.log('Initializing XR raycast planes...');
+
+      // Get invd from global stereo_render_data if available
+      const stereoData = (window as any).lifStereoRenderData;
+      const invd = stereoData ? (stereoData.invd ?? stereoData.inv_convergence_distance) : undefined;
+
+      // Create left eye plane
+      this.raycastPlaneLeft = new RaycastPlane(1, 1);
+      await this.raycastPlaneLeft.initializeFromProjector(projectors, invd);
+      this.raycastPlaneLeft.updatePlaneSizeFromCamera(leftCamera);
+      leftCamera.add(this.raycastPlaneLeft);
+
+      const planeDistanceLeft = this.raycastPlaneLeft.planeDistance;
+      this.raycastPlaneLeft.position.set(0, 0, -planeDistanceLeft);
+      this.raycastPlaneLeft.quaternion.identity();
+
+      // Create right eye plane
+      this.raycastPlaneRight = new RaycastPlane(1, 1);
+      await this.raycastPlaneRight.initializeFromProjector(projectors, invd);
+      this.raycastPlaneRight.updatePlaneSizeFromCamera(rightCamera);
+      rightCamera.add(this.raycastPlaneRight);
+
+      const planeDistanceRight = this.raycastPlaneRight.planeDistance;
+      this.raycastPlaneRight.position.set(0, 0, -planeDistanceRight);
+      this.raycastPlaneRight.quaternion.identity();
+
+      this.isXRInitialized = true;
+      console.log(`XR raycast planes initialized at distances: L=${planeDistanceLeft}, R=${planeDistanceRight}`);
+    }
+
+    // Update camera matrices
+    leftCamera.updateMatrixWorld();
+    rightCamera.updateMatrixWorld();
+
+    // Update left eye projector poses and uniforms
+    if (this.raycastPlaneLeft) {
+      this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
+      this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
+    }
+
+    // Update right eye projector poses and uniforms
+    if (this.raycastPlaneRight) {
+      this.raycastPlaneRight.updateProjectorPoses(rightCamera);
+      this.raycastPlaneRight.updateDynamicUniforms(rightCamera, renderer);
+    }
+
+    // Manual rendering for each eye
+    // THREE.js XR handles stereo rendering automatically, but we need to manually render camera children
+    const oldAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+
+    if (this.raycastPlaneLeft) {
+      renderer.render(this.raycastPlaneLeft, leftCamera);
+    }
+
+    if (this.raycastPlaneRight) {
+      renderer.render(this.raycastPlaneRight, rightCamera);
+    }
+
+    renderer.autoClear = oldAutoClear;
+
+    // Hide the mesh geometry when in XR raytracing mode
     if (this.geometry !== new THREE.BufferGeometry()) {
       this.geometry = new THREE.BufferGeometry();
     }
