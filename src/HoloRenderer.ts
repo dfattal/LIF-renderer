@@ -304,11 +304,14 @@ export class HoloRenderer extends THREE.Mesh {
 
     // CRITICAL: Manually render the plane since it's a camera child
     // THREE.js doesn't render camera children by default, so we do it explicitly
-    // Use autoClear: false to avoid clearing the scene that was just rendered
-    const oldAutoClear = renderer.autoClear;
-    renderer.autoClear = false;
-    renderer.render(this.raycastPlane, camera);
-    renderer.autoClear = oldAutoClear;
+    // Skip this in XR mode - VR cameras have their own per-eye planes
+    if (!renderer.xr.isPresenting) {
+      // Use autoClear: false to avoid clearing the scene that was just rendered
+      const oldAutoClear = renderer.autoClear;
+      renderer.autoClear = false;
+      renderer.render(this.raycastPlane, camera);
+      renderer.autoClear = oldAutoClear;
+    }
 
     // Hide the mesh geometry when in raytracing mode
     if (this.geometry !== new THREE.BufferGeometry()) {
@@ -339,12 +342,14 @@ export class HoloRenderer extends THREE.Mesh {
     const rightCamera = xrCamera.cameras[1];
 
     // Set camera layers for per-eye rendering
-    // Disable default layer 0 and only enable the eye-specific layer
+    // Enable both the eye-specific layer AND layer 0 (for controllers and other THREE.js geometry)
     leftCamera.layers.disableAll();
-    leftCamera.layers.enable(1); // Left eye sees only layer 1
+    leftCamera.layers.enable(0); // Enable default layer for controllers, etc.
+    leftCamera.layers.enable(1); // Left eye sees layer 1 (left raycast plane)
 
     rightCamera.layers.disableAll();
-    rightCamera.layers.enable(2); // Right eye sees only layer 2
+    rightCamera.layers.enable(0); // Enable default layer for controllers, etc.
+    rightCamera.layers.enable(2); // Right eye sees layer 2 (right raycast plane)
 
     // Update world matrices (projection matrices are set by WebXR, don't modify them)
     leftCamera.updateMatrixWorld();
@@ -371,9 +376,11 @@ export class HoloRenderer extends THREE.Mesh {
         this.raycastPlaneLeft.layers.set(1);
         this.raycastPlaneLeft.traverse((obj) => obj.layers.set(1));
 
-        leftCamera.add(this.raycastPlaneLeft);
+        // Add to scene instead of camera, so it's rendered by normal scene rendering
+        scene.add(this.raycastPlaneLeft);
 
         const planeDistanceLeft = this.raycastPlaneLeft.planeDistance;
+        // Position will be updated each frame relative to left camera
         this.raycastPlaneLeft.position.set(0, 0, -planeDistanceLeft);
         this.raycastPlaneLeft.quaternion.identity();
 
@@ -386,9 +393,11 @@ export class HoloRenderer extends THREE.Mesh {
         this.raycastPlaneRight.layers.set(2);
         this.raycastPlaneRight.traverse((obj) => obj.layers.set(2));
 
-        rightCamera.add(this.raycastPlaneRight);
+        // Add to scene instead of camera, so it's rendered by normal scene rendering
+        scene.add(this.raycastPlaneRight);
 
         const planeDistanceRight = this.raycastPlaneRight.planeDistance;
+        // Position will be updated each frame relative to right camera
         this.raycastPlaneRight.position.set(0, 0, -planeDistanceRight);
         this.raycastPlaneRight.quaternion.identity();
 
@@ -398,33 +407,53 @@ export class HoloRenderer extends THREE.Mesh {
       return;
     }
 
-    // Determine which eye is currently being rendered by checking which camera matches
-    const isLeftEye = camera === leftCamera;
-    const isRightEye = camera === rightCamera;
+    // Update both planes' positions and orientations to be viewer-local
+    // Left eye plane
+    if (this.raycastPlaneLeft) {
+      leftCamera.updateMatrixWorld();
 
-    if (!isLeftEye && !isRightEye) {
-      console.warn('XR: Camera does not match left or right eye!');
-      return;
-    }
+      // Position plane in front of left camera in world space
+      const leftCameraWorldPos = new THREE.Vector3();
+      const leftCameraWorldQuat = new THREE.Quaternion();
+      leftCamera.getWorldPosition(leftCameraWorldPos);
+      leftCamera.getWorldQuaternion(leftCameraWorldQuat);
 
-    // Update and render only the plane for the current eye
-    if (isLeftEye && this.raycastPlaneLeft) {
+      // Offset by plane distance in camera forward direction
+      const offset = new THREE.Vector3(0, 0, -this.raycastPlaneLeft.planeDistance);
+      offset.applyQuaternion(leftCameraWorldQuat);
+
+      this.raycastPlaneLeft.position.copy(leftCameraWorldPos).add(offset);
+      this.raycastPlaneLeft.quaternion.copy(leftCameraWorldQuat);
+
+      // Update uniforms
       this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
       this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
+    }
 
-      const oldAutoClear = renderer.autoClear;
-      renderer.autoClear = false;
-      renderer.render(this.raycastPlaneLeft, leftCamera);
-      renderer.autoClear = oldAutoClear;
-    } else if (isRightEye && this.raycastPlaneRight) {
+    // Right eye plane
+    if (this.raycastPlaneRight) {
+      rightCamera.updateMatrixWorld();
+
+      // Position plane in front of right camera in world space
+      const rightCameraWorldPos = new THREE.Vector3();
+      const rightCameraWorldQuat = new THREE.Quaternion();
+      rightCamera.getWorldPosition(rightCameraWorldPos);
+      rightCamera.getWorldQuaternion(rightCameraWorldQuat);
+
+      // Offset by plane distance in camera forward direction
+      const offset = new THREE.Vector3(0, 0, -this.raycastPlaneRight.planeDistance);
+      offset.applyQuaternion(rightCameraWorldQuat);
+
+      this.raycastPlaneRight.position.copy(rightCameraWorldPos).add(offset);
+      this.raycastPlaneRight.quaternion.copy(rightCameraWorldQuat);
+
+      // Update uniforms
       this.raycastPlaneRight.updateProjectorPoses(rightCamera);
       this.raycastPlaneRight.updateDynamicUniforms(rightCamera, renderer);
-
-      const oldAutoClear = renderer.autoClear;
-      renderer.autoClear = false;
-      renderer.render(this.raycastPlaneRight, rightCamera);
-      renderer.autoClear = oldAutoClear;
     }
+
+    // Planes are now in the scene and will be rendered automatically by THREE.js
+    // Layer system ensures left camera only sees layer 1, right camera only sees layer 2
 
     // Hide the mesh geometry when in XR raytracing mode
     if (this.geometry !== new THREE.BufferGeometry()) {

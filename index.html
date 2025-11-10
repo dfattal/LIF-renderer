@@ -1589,11 +1589,11 @@
           }
         });
 
-        // Hide desktop raycast plane in VR mode
+        // Desktop raycast plane is automatically hidden in VR mode via layer system
+        // (desktop plane is on layer 3, VR cameras only see layers 0, 1, 2)
         const holoRenderer = findHoloRenderer();
         if (holoRenderer && holoRenderer.raycastPlane) {
-          holoRenderer.raycastPlane.visible = false;
-          console.log('Desktop raycast plane hidden for VR mode');
+          console.log('Desktop raycast plane hidden via layer system (layer 3)');
         }
 
         // Hide orbit marker in VR mode
@@ -1619,10 +1619,10 @@
           if (holoRenderer) {
             holoRenderer.cleanupXR();
 
-            // Restore desktop raycast plane visibility
+            // Desktop raycast plane automatically visible via layer system
+            // (desktop camera sees all layers including layer 3)
             if (holoRenderer.raycastPlane) {
-              holoRenderer.raycastPlane.visible = true;
-              console.log('Desktop raycast plane restored');
+              console.log('Desktop raycast plane restored via layer system');
             }
           }
 
