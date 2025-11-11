@@ -295,35 +295,47 @@ export class RaycastPlane extends THREE.Mesh {
   public updatePlaneSizeFromCamera(camera: THREE.Camera, eyeLabel?: string): void {
     if (!this.projector) return;
 
-    let fovRadians: number;
-    let aspect: number;
+    let planeWidth: number;
+    let planeHeight: number;
+    let offsetX = 0;
+    let offsetY = 0;
 
     // For XR cameras (identified by eyeLabel), always extract from projection matrix
     // For regular desktop cameras, use direct properties
     if (eyeLabel) {
-      // XR camera - extract from projection matrix
-      // For symmetric perspective: m[5] = 1 / tan(vFOV/2)
-      const m = camera.projectionMatrix.elements;
-      console.log(`${eyeLabel}: Projection matrix m[0]=${m[0].toFixed(4)}, m[5]=${m[5].toFixed(4)}`);
-      fovRadians = 2 * Math.atan(1 / m[5]);
-      aspect = m[5] / m[0];
-      console.log(`${eyeLabel}: Extracted from projection matrix (vFOV=${THREE.MathUtils.radToDeg(fovRadians).toFixed(1)}°, aspect=${aspect.toFixed(2)})`);
-    } else {
-      // Regular perspective camera with direct FOV property (desktop mode)
-      const perspCam = camera as THREE.PerspectiveCamera;
-      fovRadians = THREE.MathUtils.degToRad(perspCam.fov);
-      aspect = perspCam.aspect;
-    }
+      // XR camera - extract asymmetric frustum from projection matrix
+      const fovTanAngles = this.computeFovTanAngles(camera);
 
-    // Calculate plane size based on camera FOV at plane distance
-    // Formula: size = 2 * distance * tan(fov / 2)
-    const planeHeight = 2 * this.planeDistance * Math.tan(fovRadians / 2);
-    const planeWidth = planeHeight * aspect;
+      // Calculate plane dimensions at plane distance using tan angles
+      const halfWidth = this.planeDistance * (fovTanAngles.tanRight + fovTanAngles.tanLeft) / 2;
+      const halfHeight = this.planeDistance * (fovTanAngles.tanUp + fovTanAngles.tanDown) / 2;
+      planeWidth = 2 * halfWidth;
+      planeHeight = 2 * halfHeight;
+
+      // Calculate offset for asymmetric frustum (plane center offset from camera forward axis)
+      offsetX = this.planeDistance * (fovTanAngles.tanRight - fovTanAngles.tanLeft) / 2;
+      offsetY = this.planeDistance * (fovTanAngles.tanUp - fovTanAngles.tanDown) / 2;
+
+      console.log(`${eyeLabel}: Asymmetric frustum - tanLeft=${fovTanAngles.tanLeft.toFixed(3)}, tanRight=${fovTanAngles.tanRight.toFixed(3)}, tanUp=${fovTanAngles.tanUp.toFixed(3)}, tanDown=${fovTanAngles.tanDown.toFixed(3)}`);
+      console.log(`${eyeLabel}: Plane offset (${offsetX.toFixed(2)}m, ${offsetY.toFixed(2)}m)`);
+    } else {
+      // Regular perspective camera with direct FOV property (desktop mode - assume symmetric)
+      const perspCam = camera as THREE.PerspectiveCamera;
+      const fovRadians = THREE.MathUtils.degToRad(perspCam.fov);
+      const aspect = perspCam.aspect;
+      planeHeight = 2 * this.planeDistance * Math.tan(fovRadians / 2);
+      planeWidth = planeHeight * aspect;
+      // Desktop cameras are symmetric, no offset needed
+    }
 
     // Update the plane geometry to match
     const newGeometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
     this.geometry.dispose();
     this.geometry = newGeometry;
+
+    // Store the offset for use when positioning the plane
+    (this as any).frustumOffsetX = offsetX;
+    (this as any).frustumOffsetY = offsetY;
 
     // Recreate the border with new geometry
     const children = this.children.filter(c => c.type === 'LineSegments');
@@ -343,8 +355,43 @@ export class RaycastPlane extends THREE.Mesh {
     this.add(border);
 
     const eyeInfo = eyeLabel ? ` [${eyeLabel}]` : '';
-    const fovDeg = THREE.MathUtils.radToDeg(fovRadians);
-    console.log(`RaycastPlane${eyeInfo}: Canvas plane size ${planeWidth.toFixed(2)}m x ${planeHeight.toFixed(2)}m at distance ${this.planeDistance.toFixed(2)}m (FOV: ${fovDeg.toFixed(1)}°, aspect: ${aspect.toFixed(2)})`);
+    console.log(`RaycastPlane${eyeInfo}: Canvas plane size ${planeWidth.toFixed(2)}m x ${planeHeight.toFixed(2)}m at distance ${this.planeDistance.toFixed(2)}m`);
+  }
+
+  /**
+   * Compute FOV tan angles from projection matrix (handles asymmetric frustums)
+   */
+  private computeFovTanAngles(camera: THREE.Camera): {
+    tanUp: number;
+    tanDown: number;
+    tanLeft: number;
+    tanRight: number;
+  } {
+    const projMatrix = camera.projectionMatrix;
+
+    // Extract relevant values from projection matrix
+    const m00 = projMatrix.elements[0];
+    const m05 = projMatrix.elements[5];
+    const m08 = projMatrix.elements[8];
+    const m09 = projMatrix.elements[9];
+
+    // Check for division by zero
+    if (Math.abs(m00) < 0.0001 || Math.abs(m05) < 0.0001) {
+      console.warn("Near-zero values in projection matrix, may cause NaN in FOV calculation");
+    }
+
+    // Extract frustum bounds in normalized device coordinates
+    const left = (1 - m08) / m00;
+    const right = (1 + m08) / m00;
+    const bottom = (1 - m09) / m05;
+    const top = (1 + m09) / m05;
+
+    return {
+      tanUp: top,
+      tanDown: -bottom,
+      tanLeft: -left,
+      tanRight: right
+    };
   }
 
   /**

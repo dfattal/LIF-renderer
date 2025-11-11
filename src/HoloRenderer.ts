@@ -435,8 +435,14 @@ export class HoloRenderer extends THREE.Mesh {
       leftCamera.getWorldPosition(leftCameraWorldPos);
       leftCamera.getWorldQuaternion(leftCameraWorldQuat);
 
-      // Offset by plane distance in camera forward direction
-      const offset = new THREE.Vector3(0, 0, -this.raycastPlaneLeft.planeDistance);
+      // Offset by plane distance in camera forward direction, plus frustum offset for asymmetric frustums
+      const frustumOffsetX = (this.raycastPlaneLeft as any).frustumOffsetX || 0;
+      const frustumOffsetY = (this.raycastPlaneLeft as any).frustumOffsetY || 0;
+      const offset = new THREE.Vector3(
+        frustumOffsetX,
+        frustumOffsetY,
+        -this.raycastPlaneLeft.planeDistance
+      );
       offset.applyQuaternion(leftCameraWorldQuat);
 
       this.raycastPlaneLeft.position.copy(leftCameraWorldPos).add(offset);
@@ -457,8 +463,14 @@ export class HoloRenderer extends THREE.Mesh {
       rightCamera.getWorldPosition(rightCameraWorldPos);
       rightCamera.getWorldQuaternion(rightCameraWorldQuat);
 
-      // Offset by plane distance in camera forward direction
-      const offset = new THREE.Vector3(0, 0, -this.raycastPlaneRight.planeDistance);
+      // Offset by plane distance in camera forward direction, plus frustum offset for asymmetric frustums
+      const frustumOffsetX = (this.raycastPlaneRight as any).frustumOffsetX || 0;
+      const frustumOffsetY = (this.raycastPlaneRight as any).frustumOffsetY || 0;
+      const offset = new THREE.Vector3(
+        frustumOffsetX,
+        frustumOffsetY,
+        -this.raycastPlaneRight.planeDistance
+      );
       offset.applyQuaternion(rightCameraWorldQuat);
 
       this.raycastPlaneRight.position.copy(rightCameraWorldPos).add(offset);
