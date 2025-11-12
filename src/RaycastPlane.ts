@@ -705,8 +705,8 @@ export class RaycastPlane extends THREE.Mesh {
     // Compute skew values (tangent angles) from frustum offsets
     // sk2.x = horizontal skew (tanSkewX), sk2.y = vertical skew (tanSkewY)
     // These represent the tangent of the angle from camera center to principal point
-    const tanSkewX = -this.frustumOffsetX / this.planeDistance;
-    const tanSkewY = -this.frustumOffsetY / this.planeDistance;
+    const tanSkewX = this.frustumOffsetX / this.planeDistance;
+    const tanSkewY = this.frustumOffsetY / this.planeDistance;
     this.uniforms.sk2.value.set(tanSkewX, tanSkewY);
 
     // Still set legacy uniforms for compatibility
