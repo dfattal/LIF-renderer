@@ -18,6 +18,14 @@ export class RaycastPlane extends THREE.Mesh {
   public trackedCamera: THREE.Camera | null = null;
   private layerTextures: Map<number, { rgb: THREE.Texture; depthMask: THREE.Texture }> = new Map();
 
+  // Base geometry dimensions for scale calculations
+  private baseGeometryWidth: number = 1.0;
+  private baseGeometryHeight: number = 1.0;
+
+  // Frustum offset for asymmetric frustums (public for access from HoloRenderer)
+  public frustumOffsetX: number = 0;
+  public frustumOffsetY: number = 0;
+
   constructor(width: number = 1, height: number = 1) {
     // Create plane geometry
     const geometry = new THREE.PlaneGeometry(width, height);
@@ -40,6 +48,10 @@ export class RaycastPlane extends THREE.Mesh {
 
     this.uniforms = uniforms;
     this.name = "RaycastPlane";
+
+    // Store base geometry dimensions for scale calculations
+    this.baseGeometryWidth = width;
+    this.baseGeometryHeight = height;
 
     // IMPORTANT: Force rendering even when attached to camera
     this.frustumCulled = false;
@@ -335,9 +347,13 @@ export class RaycastPlane extends THREE.Mesh {
     this.geometry.dispose();
     this.geometry = newGeometry;
 
+    // Store base geometry dimensions (first time only, or when explicitly recreating)
+    this.baseGeometryWidth = planeWidth;
+    this.baseGeometryHeight = planeHeight;
+
     // Store the offset for use when positioning the plane
-    (this as any).frustumOffsetX = offsetX;
-    (this as any).frustumOffsetY = offsetY;
+    this.frustumOffsetX = offsetX;
+    this.frustumOffsetY = offsetY;
 
     // Recreate the border with new geometry
     const children = this.children.filter(c => c.type === 'LineSegments');
@@ -363,7 +379,7 @@ export class RaycastPlane extends THREE.Mesh {
   /**
    * Compute FOV tan angles from projection matrix (handles asymmetric frustums)
    */
-  private computeFovTanAngles(camera: THREE.Camera): {
+  public computeFovTanAngles(camera: THREE.Camera): {
     tanUp: number;
     tanDown: number;
     tanLeft: number;
@@ -394,6 +410,36 @@ export class RaycastPlane extends THREE.Mesh {
       tanLeft: -left,
       tanRight: right
     };
+  }
+
+  /**
+   * Update frustum dimensions and offsets from camera projection matrix
+   * Uses scale transform instead of geometry recreation for efficiency
+   * Call this per-frame for eye-tracked displays with dynamic frustums
+   */
+  public updateFrustumFromCamera(camera: THREE.Camera, eyeLabel?: string): void {
+    // Compute frustum tan angles from projection matrix
+    const fovTanAngles = this.computeFovTanAngles(camera);
+
+    // Calculate new dimensions at plane distance
+    const newWidth = this.planeDistance * (fovTanAngles.tanRight - fovTanAngles.tanLeft);
+    const newHeight = this.planeDistance * (fovTanAngles.tanUp - fovTanAngles.tanDown);
+
+    // Update scale to match new dimensions (no geometry recreation needed!)
+    this.scale.set(
+      newWidth / this.baseGeometryWidth,
+      newHeight / this.baseGeometryHeight,
+      1.0
+    );
+
+    // Update frustum offsets for asymmetric frustums
+    this.frustumOffsetX = this.planeDistance * (fovTanAngles.tanRight + fovTanAngles.tanLeft) / 2;
+    this.frustumOffsetY = this.planeDistance * (fovTanAngles.tanUp + fovTanAngles.tanDown) / 2;
+
+    // Optional debug logging
+    if (eyeLabel) {
+      console.log(`${eyeLabel}: Dynamic frustum update - scale=(${this.scale.x.toFixed(3)}, ${this.scale.y.toFixed(3)}), offset=(${this.frustumOffsetX.toFixed(2)}m, ${this.frustumOffsetY.toFixed(2)}m)`);
+    }
   }
 
   /**

@@ -429,6 +429,9 @@ export class HoloRenderer extends THREE.Mesh {
     if (this.raycastPlaneLeft) {
       leftCamera.updateMatrixWorld();
 
+      // Update frustum from camera projection matrix (handles dynamic frustums for eye tracking)
+      this.raycastPlaneLeft.updateFrustumFromCamera(leftCamera);
+
       // Position plane in front of left camera in world space
       const leftCameraWorldPos = new THREE.Vector3();
       const leftCameraWorldQuat = new THREE.Quaternion();
@@ -436,11 +439,9 @@ export class HoloRenderer extends THREE.Mesh {
       leftCamera.getWorldQuaternion(leftCameraWorldQuat);
 
       // Offset by plane distance in camera forward direction, plus frustum offset for asymmetric frustums
-      const frustumOffsetX = (this.raycastPlaneLeft as any).frustumOffsetX || 0;
-      const frustumOffsetY = (this.raycastPlaneLeft as any).frustumOffsetY || 0;
       const offset = new THREE.Vector3(
-        frustumOffsetX,
-        frustumOffsetY,
+        this.raycastPlaneLeft.frustumOffsetX,
+        this.raycastPlaneLeft.frustumOffsetY,
         -this.raycastPlaneLeft.planeDistance
       );
       offset.applyQuaternion(leftCameraWorldQuat);
@@ -457,6 +458,9 @@ export class HoloRenderer extends THREE.Mesh {
     if (this.raycastPlaneRight) {
       rightCamera.updateMatrixWorld();
 
+      // Update frustum from camera projection matrix (handles dynamic frustums for eye tracking)
+      this.raycastPlaneRight.updateFrustumFromCamera(rightCamera);
+
       // Position plane in front of right camera in world space
       const rightCameraWorldPos = new THREE.Vector3();
       const rightCameraWorldQuat = new THREE.Quaternion();
@@ -464,11 +468,9 @@ export class HoloRenderer extends THREE.Mesh {
       rightCamera.getWorldQuaternion(rightCameraWorldQuat);
 
       // Offset by plane distance in camera forward direction, plus frustum offset for asymmetric frustums
-      const frustumOffsetX = (this.raycastPlaneRight as any).frustumOffsetX || 0;
-      const frustumOffsetY = (this.raycastPlaneRight as any).frustumOffsetY || 0;
       const offset = new THREE.Vector3(
-        frustumOffsetX,
-        frustumOffsetY,
+        this.raycastPlaneRight.frustumOffsetX,
+        this.raycastPlaneRight.frustumOffsetY,
         -this.raycastPlaneRight.planeDistance
       );
       offset.applyQuaternion(rightCameraWorldQuat);
