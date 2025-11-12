@@ -307,14 +307,16 @@ export class RaycastPlane extends THREE.Mesh {
       const fovTanAngles = this.computeFovTanAngles(camera);
 
       // Calculate plane dimensions at plane distance using tan angles
-      const halfWidth = this.planeDistance * (fovTanAngles.tanRight + fovTanAngles.tanLeft) / 2;
-      const halfHeight = this.planeDistance * (fovTanAngles.tanUp + fovTanAngles.tanDown) / 2;
-      planeWidth = 2 * halfWidth;
-      planeHeight = 2 * halfHeight;
+      // tanRight and tanLeft are distances from center, so width = distance from left edge to right edge
+      planeWidth = this.planeDistance * (fovTanAngles.tanRight - fovTanAngles.tanLeft);
+      // tanUp and tanDown: tanUp is positive (above center), tanDown is negative (below center)
+      planeHeight = this.planeDistance * (fovTanAngles.tanUp - fovTanAngles.tanDown);
 
       // Calculate offset for asymmetric frustum (plane center offset from camera forward axis)
-      offsetX = this.planeDistance * (fovTanAngles.tanRight - fovTanAngles.tanLeft) / 2;
-      offsetY = this.planeDistance * (fovTanAngles.tanUp - fovTanAngles.tanDown) / 2;
+      // Center is midpoint between left and right edges
+      offsetX = this.planeDistance * (fovTanAngles.tanRight + fovTanAngles.tanLeft) / 2;
+      // Center is midpoint between top and bottom edges
+      offsetY = this.planeDistance * (fovTanAngles.tanUp + fovTanAngles.tanDown) / 2;
 
       console.log(`${eyeLabel}: Asymmetric frustum - tanLeft=${fovTanAngles.tanLeft.toFixed(3)}, tanRight=${fovTanAngles.tanRight.toFixed(3)}, tanUp=${fovTanAngles.tanUp.toFixed(3)}, tanDown=${fovTanAngles.tanDown.toFixed(3)}`);
       console.log(`${eyeLabel}: Plane offset (${offsetX.toFixed(2)}m, ${offsetY.toFixed(2)}m)`);
