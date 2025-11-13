@@ -1598,8 +1598,9 @@
           console.log('Got viewer reference space for raycast planes');
 
           // Pass viewer space to renderer for HUD elements
-          if (window.holoRenderer) {
-            window.holoRenderer.setViewerReferenceSpace(xrViewerSpace);
+          const holoRenderer = findHoloRenderer();
+          if (holoRenderer) {
+            holoRenderer.setViewerReferenceSpace(xrViewerSpace);
           }
         } catch (e) {
           console.warn('Could not get viewer reference space:', e);

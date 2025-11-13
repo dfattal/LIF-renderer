@@ -453,58 +453,108 @@ export class HoloRenderer extends THREE.Mesh {
     // Scene uses "local-floor" space, but planes follow the head like a HUD
     // We position planes relative to each eye camera (which are in viewer space)
 
-    // Left eye plane - make it a camera child for perfect head-locking
+    // Left eye plane - keep in scene but position using viewer reference space
     if (this.raycastPlaneLeft) {
       leftCamera.updateMatrixWorld(true);
 
       // Update frustum from camera projection matrix (handles dynamic eye tracking)
       this.raycastPlaneLeft.updateFrustumFromCamera(leftCamera, 'left');
 
-      // Make plane a child of the camera (viewer space)
-      if (this.raycastPlaneLeft.parent !== leftCamera) {
+      // Ensure plane is in scene, not as camera child
+      if (this.raycastPlaneLeft.parent !== scene) {
         if (this.raycastPlaneLeft.parent) {
           this.raycastPlaneLeft.parent.remove(this.raycastPlaneLeft);
         }
-        leftCamera.add(this.raycastPlaneLeft);
-        console.log('Left plane added as camera child (viewer space)');
+        scene.add(this.raycastPlaneLeft);
+        console.log('Left plane re-added to scene');
       }
 
-      // Position in camera-local coordinates
-      this.raycastPlaneLeft.position.set(
-        this.raycastPlaneLeft.frustumOffsetX,
-        this.raycastPlaneLeft.frustumOffsetY,
-        -this.raycastPlaneLeft.planeDistance
-      );
-      this.raycastPlaneLeft.quaternion.identity();
+      // Get XRFrame to query viewer reference space transform
+      const xrFrame = renderer.xr.getFrame();
+      if (xrFrame && this.xrViewerSpace) {
+        try {
+          // Get the transform from local-floor to viewer space
+          const viewerPose = xrFrame.getViewerPose(renderer.xr.getReferenceSpace()!);
+          if (viewerPose) {
+            // Viewer transform gives us head position/rotation in local-floor space
+            const viewMatrix = viewerPose.transform.matrix;
+
+            // Create THREE.js matrix from XR matrix (column-major)
+            const viewerMatrix = new THREE.Matrix4().fromArray(viewMatrix);
+
+            // Build local offset matrix
+            const localOffset = new THREE.Matrix4().makeTranslation(
+              this.raycastPlaneLeft.frustumOffsetX,
+              this.raycastPlaneLeft.frustumOffsetY,
+              -this.raycastPlaneLeft.planeDistance
+            );
+
+            // Combine: planeWorld = viewerWorld * localOffset
+            const planeMatrix = new THREE.Matrix4().multiplyMatrices(viewerMatrix, localOffset);
+
+            // Apply to plane
+            this.raycastPlaneLeft.matrix.copy(planeMatrix);
+            this.raycastPlaneLeft.matrixAutoUpdate = false;
+            this.raycastPlaneLeft.matrixWorld.copy(planeMatrix);
+          }
+        } catch (e) {
+          console.warn('Could not get viewer pose:', e);
+        }
+      }
 
       // Update shader uniforms
       this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
       this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
     }
 
-    // Right eye plane - make it a camera child for perfect head-locking
+    // Right eye plane - keep in scene but position using viewer reference space
     if (this.raycastPlaneRight) {
       rightCamera.updateMatrixWorld(true);
 
       // Update frustum from camera projection matrix (handles dynamic eye tracking)
       this.raycastPlaneRight.updateFrustumFromCamera(rightCamera, 'right');
 
-      // Make plane a child of the camera (viewer space)
-      if (this.raycastPlaneRight.parent !== rightCamera) {
+      // Ensure plane is in scene, not as camera child
+      if (this.raycastPlaneRight.parent !== scene) {
         if (this.raycastPlaneRight.parent) {
           this.raycastPlaneRight.parent.remove(this.raycastPlaneRight);
         }
-        rightCamera.add(this.raycastPlaneRight);
-        console.log('Right plane added as camera child (viewer space)');
+        scene.add(this.raycastPlaneRight);
+        console.log('Right plane re-added to scene');
       }
 
-      // Position in camera-local coordinates
-      this.raycastPlaneRight.position.set(
-        this.raycastPlaneRight.frustumOffsetX,
-        this.raycastPlaneRight.frustumOffsetY,
-        -this.raycastPlaneRight.planeDistance
-      );
-      this.raycastPlaneRight.quaternion.identity();
+      // Get XRFrame to query viewer reference space transform
+      const xrFrame = renderer.xr.getFrame();
+      if (xrFrame && this.xrViewerSpace) {
+        try {
+          // Get the transform from local-floor to viewer space
+          const viewerPose = xrFrame.getViewerPose(renderer.xr.getReferenceSpace()!);
+          if (viewerPose) {
+            // Viewer transform gives us head position/rotation in local-floor space
+            const viewMatrix = viewerPose.transform.matrix;
+
+            // Create THREE.js matrix from XR matrix (column-major)
+            const viewerMatrix = new THREE.Matrix4().fromArray(viewMatrix);
+
+            // Build local offset matrix
+            const localOffset = new THREE.Matrix4().makeTranslation(
+              this.raycastPlaneRight.frustumOffsetX,
+              this.raycastPlaneRight.frustumOffsetY,
+              -this.raycastPlaneRight.planeDistance
+            );
+
+            // Combine: planeWorld = viewerWorld * localOffset
+            const planeMatrix = new THREE.Matrix4().multiplyMatrices(viewerMatrix, localOffset);
+
+            // Apply to plane
+            this.raycastPlaneRight.matrix.copy(planeMatrix);
+            this.raycastPlaneRight.matrixAutoUpdate = false;
+            this.raycastPlaneRight.matrixWorld.copy(planeMatrix);
+          }
+        } catch (e) {
+          console.warn('Could not get viewer pose:', e);
+        }
+      }
 
       // Update shader uniforms
       this.raycastPlaneRight.updateProjectorPoses(rightCamera);
