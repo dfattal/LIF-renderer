@@ -1577,13 +1577,14 @@
         await renderer.xr.setSession(xrSession);
 
         // Try to get reference space with fallback chain
+        // Use local-floor for scene content (controllers, mesh, etc.)
         try {
           xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
-          console.log('Using local-floor reference space');
+          console.log('Using local-floor reference space for scene');
         } catch (e) {
           try {
             xrRefSpace = await xrSession.requestReferenceSpace('local');
-            console.log('Using local reference space');
+            console.log('Using local reference space for scene');
           } catch (e2) {
             xrRefSpace = await xrSession.requestReferenceSpace('viewer');
             console.log('Using viewer reference space (fallback)');

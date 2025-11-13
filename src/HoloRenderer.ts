@@ -395,15 +395,16 @@ export class HoloRenderer extends THREE.Mesh {
         this.raycastPlaneLeft.frustumOffsetX = offsetXLeft;
         this.raycastPlaneLeft.frustumOffsetY = offsetYLeft;
 
-        // Add as child of XR camera rig (not scene) to follow headset in viewer space
-        xrCamera.add(this.raycastPlaneLeft);
+        // Add to scene for automatic rendering with layer system
+        scene.add(this.raycastPlaneLeft);
 
-        // Position relative to camera origin (viewer-local)
+        // Position at FIXED location in XR reference space (viewer-local)
+        // The shader handles camera-relative calculations, so plane stays put
         const planeDistanceLeft = this.raycastPlaneLeft.planeDistance;
         this.raycastPlaneLeft.position.set(offsetXLeft, offsetYLeft, -planeDistanceLeft);
         this.raycastPlaneLeft.quaternion.identity();
 
-        console.log(`Left eye plane: Added to XR camera rig with offset (${offsetXLeft.toFixed(2)}m, ${offsetYLeft.toFixed(2)}m)`);
+        console.log(`Left eye plane: Fixed at XR origin with offset (${offsetXLeft.toFixed(2)}m, ${offsetYLeft.toFixed(2)}m)`);
 
         // Create right eye plane
         this.raycastPlaneRight = new RaycastPlane(1, 1);
@@ -430,15 +431,16 @@ export class HoloRenderer extends THREE.Mesh {
         this.raycastPlaneRight.frustumOffsetX = offsetXRight;
         this.raycastPlaneRight.frustumOffsetY = offsetYRight;
 
-        // Add as child of XR camera rig (not scene) to follow headset in viewer space
-        xrCamera.add(this.raycastPlaneRight);
+        // Add to scene for automatic rendering with layer system
+        scene.add(this.raycastPlaneRight);
 
-        // Position relative to camera origin (viewer-local)
+        // Position at FIXED location in XR reference space (viewer-local)
+        // The shader handles camera-relative calculations, so plane stays put
         const planeDistanceRight = this.raycastPlaneRight.planeDistance;
         this.raycastPlaneRight.position.set(offsetXRight, offsetYRight, -planeDistanceRight);
         this.raycastPlaneRight.quaternion.identity();
 
-        console.log(`Right eye plane: Added to XR camera rig with offset (${offsetXRight.toFixed(2)}m, ${offsetYRight.toFixed(2)}m)`);
+        console.log(`Right eye plane: Fixed at XR origin with offset (${offsetXRight.toFixed(2)}m, ${offsetYRight.toFixed(2)}m)`);
 
         console.log(`XR raycast planes initialized at distances: L=${planeDistanceLeft}, R=${planeDistanceRight}`);
       }
@@ -446,9 +448,9 @@ export class HoloRenderer extends THREE.Mesh {
       return;
     }
 
-    // Update shader uniforms for both planes
-    // Planes remain at FIXED positions in XR reference space - no per-frame repositioning!
-    // The shader handles all camera-relative transformations using the uniforms we pass
+    // Update planes to follow viewer (headset) in "viewer" space
+    // Scene uses "local-floor" space, but planes follow the head like a HUD
+    // We position planes relative to each eye camera (which are in viewer space)
 
     // Left eye plane
     if (this.raycastPlaneLeft) {
@@ -457,11 +459,26 @@ export class HoloRenderer extends THREE.Mesh {
       // Update frustum from camera projection matrix (handles dynamic eye tracking)
       this.raycastPlaneLeft.updateFrustumFromCamera(leftCamera, 'left');
 
-      // Update only shader uniforms - projector poses and dynamic parameters
+      // Position plane in front of left camera in world space (viewer-following)
+      const leftCameraWorldPos = new THREE.Vector3();
+      const leftCameraWorldQuat = new THREE.Quaternion();
+      leftCamera.getWorldPosition(leftCameraWorldPos);
+      leftCamera.getWorldQuaternion(leftCameraWorldQuat);
+
+      // Offset by plane distance in camera forward direction, plus frustum offset
+      const offsetLeft = new THREE.Vector3(
+        this.raycastPlaneLeft.frustumOffsetX,
+        this.raycastPlaneLeft.frustumOffsetY,
+        -this.raycastPlaneLeft.planeDistance
+      );
+      offsetLeft.applyQuaternion(leftCameraWorldQuat);
+
+      this.raycastPlaneLeft.position.copy(leftCameraWorldPos).add(offsetLeft);
+      this.raycastPlaneLeft.quaternion.copy(leftCameraWorldQuat);
+
+      // Update shader uniforms
       this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
       this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
-
-      console.log('[VR] Left plane fixed at:', this.raycastPlaneLeft.position, 'quat:', this.raycastPlaneLeft.quaternion);
     }
 
     // Right eye plane
@@ -471,17 +488,31 @@ export class HoloRenderer extends THREE.Mesh {
       // Update frustum from camera projection matrix (handles dynamic eye tracking)
       this.raycastPlaneRight.updateFrustumFromCamera(rightCamera, 'right');
 
-      // Update only shader uniforms - projector poses and dynamic parameters
+      // Position plane in front of right camera in world space (viewer-following)
+      const rightCameraWorldPos = new THREE.Vector3();
+      const rightCameraWorldQuat = new THREE.Quaternion();
+      rightCamera.getWorldPosition(rightCameraWorldPos);
+      rightCamera.getWorldQuaternion(rightCameraWorldQuat);
+
+      // Offset by plane distance in camera forward direction, plus frustum offset
+      const offsetRight = new THREE.Vector3(
+        this.raycastPlaneRight.frustumOffsetX,
+        this.raycastPlaneRight.frustumOffsetY,
+        -this.raycastPlaneRight.planeDistance
+      );
+      offsetRight.applyQuaternion(rightCameraWorldQuat);
+
+      this.raycastPlaneRight.position.copy(rightCameraWorldPos).add(offsetRight);
+      this.raycastPlaneRight.quaternion.copy(rightCameraWorldQuat);
+
+      // Update shader uniforms
       this.raycastPlaneRight.updateProjectorPoses(rightCamera);
       this.raycastPlaneRight.updateDynamicUniforms(rightCamera, renderer);
-
-      console.log('[VR] Right plane fixed at:', this.raycastPlaneRight.position, 'quat:', this.raycastPlaneRight.quaternion);
     }
 
-    // Planes are children of XR camera rig and follow headset in viewer space
-    // THREE.js automatically renders camera children during XR rendering
+    // Planes follow viewer (headset) in world space, acting like HUD elements
+    // Scene content (controllers, mesh) stays in local-floor reference space
     // Layer system ensures left camera only sees layer 1, right camera only sees layer 2
-    // The shader receives camera transforms via uniforms and handles all spatial calculations
 
     // Hide the mesh geometry when in XR raytracing mode
     if (this.geometry !== new THREE.BufferGeometry()) {
