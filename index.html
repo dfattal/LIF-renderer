@@ -1538,6 +1538,7 @@
     // WebXR Session Management
     let xrSession = null;
     let xrRefSpace = null;
+    let xrViewerSpace = null; // Separate viewer reference space for HUD elements
     let controller1 = null;
     let controller2 = null;
     let controllerGrip1 = null;
@@ -1589,6 +1590,19 @@
             xrRefSpace = await xrSession.requestReferenceSpace('viewer');
             console.log('Using viewer reference space (fallback)');
           }
+        }
+
+        // ALSO get viewer reference space for HUD elements (raycast planes)
+        try {
+          xrViewerSpace = await xrSession.requestReferenceSpace('viewer');
+          console.log('Got viewer reference space for raycast planes');
+
+          // Pass viewer space to renderer for HUD elements
+          if (window.holoRenderer) {
+            window.holoRenderer.setViewerReferenceSpace(xrViewerSpace);
+          }
+        } catch (e) {
+          console.warn('Could not get viewer reference space:', e);
         }
 
         // Setup XR controllers

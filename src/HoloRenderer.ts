@@ -47,6 +47,7 @@ export class HoloRenderer extends THREE.Mesh {
   public raycastPlaneLeft: RaycastPlane | null = null; // Public to allow mode switching
   public raycastPlaneRight: RaycastPlane | null = null; // Public to allow mode switching
   private isXRInitialized: boolean = false;
+  private xrViewerSpace: XRReferenceSpace | null = null; // Viewer reference space for head-locked HUD
 
   static EMPTY_TEXTURE = new THREE.Texture();
 
@@ -452,58 +453,58 @@ export class HoloRenderer extends THREE.Mesh {
     // Scene uses "local-floor" space, but planes follow the head like a HUD
     // We position planes relative to each eye camera (which are in viewer space)
 
-    // Left eye plane
+    // Left eye plane - make it a camera child for perfect head-locking
     if (this.raycastPlaneLeft) {
-      leftCamera.updateMatrixWorld();
+      leftCamera.updateMatrixWorld(true);
 
       // Update frustum from camera projection matrix (handles dynamic eye tracking)
       this.raycastPlaneLeft.updateFrustumFromCamera(leftCamera, 'left');
 
-      // Position plane in front of left camera in world space (viewer-following)
-      const leftCameraWorldPos = new THREE.Vector3();
-      const leftCameraWorldQuat = new THREE.Quaternion();
-      leftCamera.getWorldPosition(leftCameraWorldPos);
-      leftCamera.getWorldQuaternion(leftCameraWorldQuat);
+      // Make plane a child of the camera (viewer space)
+      if (this.raycastPlaneLeft.parent !== leftCamera) {
+        if (this.raycastPlaneLeft.parent) {
+          this.raycastPlaneLeft.parent.remove(this.raycastPlaneLeft);
+        }
+        leftCamera.add(this.raycastPlaneLeft);
+        console.log('Left plane added as camera child (viewer space)');
+      }
 
-      // Offset by plane distance in camera forward direction, plus frustum offset
-      const offsetLeft = new THREE.Vector3(
+      // Position in camera-local coordinates
+      this.raycastPlaneLeft.position.set(
         this.raycastPlaneLeft.frustumOffsetX,
         this.raycastPlaneLeft.frustumOffsetY,
         -this.raycastPlaneLeft.planeDistance
       );
-      offsetLeft.applyQuaternion(leftCameraWorldQuat);
-
-      this.raycastPlaneLeft.position.copy(leftCameraWorldPos).add(offsetLeft);
-      this.raycastPlaneLeft.quaternion.copy(leftCameraWorldQuat);
+      this.raycastPlaneLeft.quaternion.identity();
 
       // Update shader uniforms
       this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
       this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
     }
 
-    // Right eye plane
+    // Right eye plane - make it a camera child for perfect head-locking
     if (this.raycastPlaneRight) {
-      rightCamera.updateMatrixWorld();
+      rightCamera.updateMatrixWorld(true);
 
       // Update frustum from camera projection matrix (handles dynamic eye tracking)
       this.raycastPlaneRight.updateFrustumFromCamera(rightCamera, 'right');
 
-      // Position plane in front of right camera in world space (viewer-following)
-      const rightCameraWorldPos = new THREE.Vector3();
-      const rightCameraWorldQuat = new THREE.Quaternion();
-      rightCamera.getWorldPosition(rightCameraWorldPos);
-      rightCamera.getWorldQuaternion(rightCameraWorldQuat);
+      // Make plane a child of the camera (viewer space)
+      if (this.raycastPlaneRight.parent !== rightCamera) {
+        if (this.raycastPlaneRight.parent) {
+          this.raycastPlaneRight.parent.remove(this.raycastPlaneRight);
+        }
+        rightCamera.add(this.raycastPlaneRight);
+        console.log('Right plane added as camera child (viewer space)');
+      }
 
-      // Offset by plane distance in camera forward direction, plus frustum offset
-      const offsetRight = new THREE.Vector3(
+      // Position in camera-local coordinates
+      this.raycastPlaneRight.position.set(
         this.raycastPlaneRight.frustumOffsetX,
         this.raycastPlaneRight.frustumOffsetY,
         -this.raycastPlaneRight.planeDistance
       );
-      offsetRight.applyQuaternion(rightCameraWorldQuat);
-
-      this.raycastPlaneRight.position.copy(rightCameraWorldPos).add(offsetRight);
-      this.raycastPlaneRight.quaternion.copy(rightCameraWorldQuat);
+      this.raycastPlaneRight.quaternion.identity();
 
       // Update shader uniforms
       this.raycastPlaneRight.updateProjectorPoses(rightCamera);
@@ -722,7 +723,16 @@ export class HoloRenderer extends THREE.Mesh {
     }
 
     this.isXRInitialized = false;
+    this.xrViewerSpace = null;
     console.log('XR raycast planes cleaned up');
+  }
+
+  /**
+   * Set the viewer reference space for head-locked HUD elements
+   */
+  public setViewerReferenceSpace(viewerSpace: XRReferenceSpace): void {
+    this.xrViewerSpace = viewerSpace;
+    console.log('Viewer reference space set for HUD raycast planes');
   }
 
   dispose(): void {
