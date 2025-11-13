@@ -274,7 +274,8 @@ void main(void) {
 
         vec3 C2 = uFacePosition;
         // Use rotation matrix directly instead of decomposed roll/slant
-        mat3 FSKR2 = matFromFocal(vec2(f2 / oRes.x, f2 / oRes.y)) * flipZ * transpose_m(uFaceRotation) * flipZ;
+        // Include skew matrix to handle asymmetric frustums (eye tracking, 3D displays)
+        mat3 FSKR2 = matFromFocal(vec2(f2 / oRes.x, f2 / oRes.y)) * matFromSkew(sk2) * flipZ * transpose_m(uFaceRotation) * flipZ;
 
         // LDI
         vec4 resultL, resultR, result, layer;
