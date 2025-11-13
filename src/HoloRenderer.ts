@@ -386,13 +386,25 @@ export class HoloRenderer extends THREE.Mesh {
         this.raycastPlaneLeft.layers.set(1);
         this.raycastPlaneLeft.traverse((obj) => obj.layers.set(1));
 
-        // Add to scene instead of camera, so it's rendered by normal scene rendering
+        // Calculate frustum offsets for asymmetric frustum (at initialization)
+        const fovTanAnglesLeft = this.raycastPlaneLeft.computeFovTanAngles(leftCamera);
+        const offsetXLeft = this.raycastPlaneLeft.planeDistance * (fovTanAnglesLeft.tanRight + fovTanAnglesLeft.tanLeft) / 2;
+        const offsetYLeft = this.raycastPlaneLeft.planeDistance * (fovTanAnglesLeft.tanUp + fovTanAnglesLeft.tanDown) / 2;
+
+        // Store frustum offsets for shader
+        this.raycastPlaneLeft.frustumOffsetX = offsetXLeft;
+        this.raycastPlaneLeft.frustumOffsetY = offsetYLeft;
+
+        // Add to scene for automatic rendering with layer system
         scene.add(this.raycastPlaneLeft);
 
+        // Position at FIXED location in XR reference space (viewer-local)
+        // The shader handles camera-relative calculations, so plane stays put
         const planeDistanceLeft = this.raycastPlaneLeft.planeDistance;
-        // Position will be updated each frame relative to left camera
-        this.raycastPlaneLeft.position.set(0, 0, -planeDistanceLeft);
+        this.raycastPlaneLeft.position.set(offsetXLeft, offsetYLeft, -planeDistanceLeft);
         this.raycastPlaneLeft.quaternion.identity();
+
+        console.log(`Left eye plane: Fixed at XR origin with offset (${offsetXLeft.toFixed(2)}m, ${offsetYLeft.toFixed(2)}m)`);
 
         // Create right eye plane
         this.raycastPlaneRight = new RaycastPlane(1, 1);
@@ -410,13 +422,25 @@ export class HoloRenderer extends THREE.Mesh {
         this.raycastPlaneRight.layers.set(2);
         this.raycastPlaneRight.traverse((obj) => obj.layers.set(2));
 
-        // Add to scene instead of camera, so it's rendered by normal scene rendering
+        // Calculate frustum offsets for asymmetric frustum (at initialization)
+        const fovTanAnglesRight = this.raycastPlaneRight.computeFovTanAngles(rightCamera);
+        const offsetXRight = this.raycastPlaneRight.planeDistance * (fovTanAnglesRight.tanRight + fovTanAnglesRight.tanLeft) / 2;
+        const offsetYRight = this.raycastPlaneRight.planeDistance * (fovTanAnglesRight.tanUp + fovTanAnglesRight.tanDown) / 2;
+
+        // Store frustum offsets for shader
+        this.raycastPlaneRight.frustumOffsetX = offsetXRight;
+        this.raycastPlaneRight.frustumOffsetY = offsetYRight;
+
+        // Add to scene for automatic rendering with layer system
         scene.add(this.raycastPlaneRight);
 
+        // Position at FIXED location in XR reference space (viewer-local)
+        // The shader handles camera-relative calculations, so plane stays put
         const planeDistanceRight = this.raycastPlaneRight.planeDistance;
-        // Position will be updated each frame relative to right camera
-        this.raycastPlaneRight.position.set(0, 0, -planeDistanceRight);
+        this.raycastPlaneRight.position.set(offsetXRight, offsetYRight, -planeDistanceRight);
         this.raycastPlaneRight.quaternion.identity();
+
+        console.log(`Right eye plane: Fixed at XR origin with offset (${offsetXRight.toFixed(2)}m, ${offsetYRight.toFixed(2)}m)`);
 
         console.log(`XR raycast planes initialized at distances: L=${planeDistanceLeft}, R=${planeDistanceRight}`);
       }
@@ -424,67 +448,41 @@ export class HoloRenderer extends THREE.Mesh {
       return;
     }
 
-    // Update both planes' positions and orientations to be viewer-local
+    // Update shader uniforms for both planes
+    // Planes remain at FIXED positions in XR reference space - no per-frame repositioning!
+    // The shader handles all camera-relative transformations using the uniforms we pass
+
     // Left eye plane
     if (this.raycastPlaneLeft) {
       leftCamera.updateMatrixWorld();
 
-      // Update frustum from camera projection matrix (handles dynamic frustums for eye tracking)
-      this.raycastPlaneLeft.updateFrustumFromCamera(leftCamera);
+      // Update frustum from camera projection matrix (handles dynamic eye tracking)
+      this.raycastPlaneLeft.updateFrustumFromCamera(leftCamera, 'left');
 
-      // Position plane in front of left camera in world space
-      const leftCameraWorldPos = new THREE.Vector3();
-      const leftCameraWorldQuat = new THREE.Quaternion();
-      leftCamera.getWorldPosition(leftCameraWorldPos);
-      leftCamera.getWorldQuaternion(leftCameraWorldQuat);
-
-      // Offset by plane distance in camera forward direction, plus frustum offset for asymmetric frustums
-      const offset = new THREE.Vector3(
-        this.raycastPlaneLeft.frustumOffsetX,
-        this.raycastPlaneLeft.frustumOffsetY,
-        -this.raycastPlaneLeft.planeDistance
-      );
-      offset.applyQuaternion(leftCameraWorldQuat);
-
-      this.raycastPlaneLeft.position.copy(leftCameraWorldPos).add(offset);
-      this.raycastPlaneLeft.quaternion.copy(leftCameraWorldQuat);
-
-      // Update uniforms
+      // Update only shader uniforms - projector poses and dynamic parameters
       this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
       this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
+
+      console.log('[VR] Left plane fixed at:', this.raycastPlaneLeft.position, 'quat:', this.raycastPlaneLeft.quaternion);
     }
 
     // Right eye plane
     if (this.raycastPlaneRight) {
       rightCamera.updateMatrixWorld();
 
-      // Update frustum from camera projection matrix (handles dynamic frustums for eye tracking)
-      this.raycastPlaneRight.updateFrustumFromCamera(rightCamera);
+      // Update frustum from camera projection matrix (handles dynamic eye tracking)
+      this.raycastPlaneRight.updateFrustumFromCamera(rightCamera, 'right');
 
-      // Position plane in front of right camera in world space
-      const rightCameraWorldPos = new THREE.Vector3();
-      const rightCameraWorldQuat = new THREE.Quaternion();
-      rightCamera.getWorldPosition(rightCameraWorldPos);
-      rightCamera.getWorldQuaternion(rightCameraWorldQuat);
-
-      // Offset by plane distance in camera forward direction, plus frustum offset for asymmetric frustums
-      const offset = new THREE.Vector3(
-        this.raycastPlaneRight.frustumOffsetX,
-        this.raycastPlaneRight.frustumOffsetY,
-        -this.raycastPlaneRight.planeDistance
-      );
-      offset.applyQuaternion(rightCameraWorldQuat);
-
-      this.raycastPlaneRight.position.copy(rightCameraWorldPos).add(offset);
-      this.raycastPlaneRight.quaternion.copy(rightCameraWorldQuat);
-
-      // Update uniforms
+      // Update only shader uniforms - projector poses and dynamic parameters
       this.raycastPlaneRight.updateProjectorPoses(rightCamera);
       this.raycastPlaneRight.updateDynamicUniforms(rightCamera, renderer);
+
+      console.log('[VR] Right plane fixed at:', this.raycastPlaneRight.position, 'quat:', this.raycastPlaneRight.quaternion);
     }
 
-    // Planes are now in the scene and will be rendered automatically by THREE.js
+    // Planes are at FIXED positions in XR reference space and rendered automatically by THREE.js
     // Layer system ensures left camera only sees layer 1, right camera only sees layer 2
+    // The shader receives camera transforms via uniforms and handles all spatial calculations
 
     // Hide the mesh geometry when in XR raytracing mode
     if (this.geometry !== new THREE.BufferGeometry()) {
