@@ -49,6 +49,9 @@ export class HoloRenderer extends THREE.Mesh {
   private isXRInitialized: boolean = false;
   private xrViewerSpace: XRReferenceSpace | null = null; // Viewer reference space for head-locked HUD
 
+  // VR Controller raycasting
+  private controllerHits: Map<number, any> = new Map(); // controller index → hit info
+
   static EMPTY_TEXTURE = new THREE.Texture();
 
   constructor(optionsOrRenderMode?: HoloRendererOptions | RenderMode) {
@@ -777,6 +780,21 @@ export class HoloRenderer extends THREE.Mesh {
   public setViewerReferenceSpace(viewerSpace: XRReferenceSpace): void {
     this.xrViewerSpace = viewerSpace;
     console.log('Viewer reference space set for HUD raycast planes');
+  }
+
+  /**
+   * Set controller hit information for shader visualization
+   */
+  public setControllerHits(hits: Map<number, any>): void {
+    this.controllerHits = hits;
+
+    // Pass hit data to raycast planes for shader rendering
+    if (this.raycastPlaneLeft) {
+      this.raycastPlaneLeft.setControllerHits(hits);
+    }
+    if (this.raycastPlaneRight) {
+      this.raycastPlaneRight.setControllerHits(hits);
+    }
   }
 
   dispose(): void {

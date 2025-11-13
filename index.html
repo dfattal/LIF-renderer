@@ -920,6 +920,165 @@
       return null;
     }
 
+    // ========================================================================
+    // VR CONTROLLER RAYCASTING
+    // ========================================================================
+
+    /**
+     * Raycast from VR controller into LDI point cloud
+     * Returns intersection info (hit point, UV, layer) or null if no hit
+     */
+    function raycastControllerPointCloud(controller) {
+      const holoRenderer = findHoloRenderer();
+      if (!holoRenderer) return null;
+
+      // Find active projectors
+      const projectors = [];
+      scene.traverse((obj) => {
+        if (obj.userData && obj.userData.isHoloProjector) {
+          projectors.push(obj);
+        }
+      });
+
+      if (projectors.length === 0) return null;
+
+      // Get controller ray in world space
+      const controllerWorldPos = new THREE.Vector3();
+      const controllerWorldDir = new THREE.Vector3();
+      controller.getWorldPosition(controllerWorldPos);
+      controller.getWorldDirection(controllerWorldDir);
+
+      // Try to hit each projector (closest first)
+      let closestHit = null;
+      let closestDist = Infinity;
+
+      for (const projector of projectors) {
+        const layers = projector.userData.lifLayers || [projector.userData];
+
+        for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
+          const layer = layers[layerIdx];
+          if (!layer.depthTexture || !layer.intrinsics) continue;
+
+          // Get depth texture image data
+          const depthTexture = layer.depthTexture;
+          let imageData;
+
+          // Extract image data from texture
+          if (depthTexture instanceof THREE.CanvasTexture) {
+            const canvas = depthTexture.image;
+            const ctx = canvas.getContext('2d');
+            imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          } else if (depthTexture.image instanceof HTMLCanvasElement) {
+            const ctx = depthTexture.image.getContext('2d');
+            imageData = ctx.getImageData(0, 0, depthTexture.image.width, depthTexture.image.height);
+          } else {
+            continue; // Can't read this texture type
+          }
+
+          const imgWidth = layer.width;
+          const imgHeight = layer.height;
+          const {fx, fy, cx, cy} = layer.intrinsics;
+          const {min: invZMin, max: invZMax, baseline = 1.0} = layer.invDepthRange;
+
+          // Transform controller ray to projector-local space
+          const projectorMatrixInv = new THREE.Matrix4();
+          projector.updateMatrixWorld();
+          projectorMatrixInv.copy(projector.matrixWorld).invert();
+
+          const rayOriginLocal = controllerWorldPos.clone().applyMatrix4(projectorMatrixInv);
+          const rayDirLocal = controllerWorldDir.clone().transformDirection(projectorMatrixInv);
+
+          // Sample depth map at pixel coordinates
+          function sampleDepthMap(px, py) {
+            const needsFlip = !(depthTexture instanceof THREE.CanvasTexture);
+            const pyToUse = needsFlip ? (imgHeight - 1) - Math.floor(py) : Math.floor(py);
+            const pxClamped = Math.max(0, Math.min(imgWidth - 1, Math.floor(px)));
+            const pyClamped = Math.max(0, Math.min(imgHeight - 1, pyToUse));
+            const idx = (pyClamped * imgWidth + pxClamped) * 4;
+            const depthValue = imageData.data[idx] / 255.0;
+            const invZ = invZMax + depthValue * (invZMin - invZMax);
+            return baseline / invZ;
+          }
+
+          // Ray marching in inverse depth space (20 steps for performance)
+          const numSteps = 20;
+          let hitFound = false;
+          let hitT = 0;
+          let hitPx = 0, hitPy = 0;
+
+          for (let step = 0; step < numSteps; step++) {
+            const t = step / numSteps;
+            const invZ = invZMax + t * (invZMin - invZMax);
+            const testDepth = baseline / invZ;
+
+            // Ray point at this depth
+            const rayPoint = rayOriginLocal.clone().addScaledVector(rayDirLocal, testDepth);
+
+            // Project to pixel coordinates
+            const px = (rayPoint.x / rayPoint.z) * fx + cx;
+            const py = (rayPoint.y / rayPoint.z) * fy + cy;
+
+            // Check if inside image bounds
+            if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) continue;
+
+            // Sample actual surface depth at this pixel
+            const surfaceDepth = sampleDepthMap(px, py);
+
+            // Check if ray is close to surface
+            if (Math.abs(rayPoint.z - surfaceDepth) < 0.01) {
+              hitFound = true;
+              hitT = rayPoint.z;
+              hitPx = px;
+              hitPy = py;
+              break;
+            }
+          }
+
+          if (hitFound) {
+            // Calculate world-space hit point
+            const hitPointLocal = rayOriginLocal.clone().addScaledVector(rayDirLocal, hitT);
+            const hitPointWorld = hitPointLocal.clone().applyMatrix4(projector.matrixWorld);
+            const distance = controllerWorldPos.distanceTo(hitPointWorld);
+
+            if (distance < closestDist) {
+              closestDist = distance;
+              closestHit = {
+                hit: true,
+                point: hitPointWorld,
+                uv: new THREE.Vector2(hitPx / imgWidth, hitPy / imgHeight),
+                layer: layerIdx,
+                distance: distance,
+                projector: projector
+              };
+            }
+          }
+        }
+      }
+
+      return closestHit;
+    }
+
+    // Track controller hit info
+    const controllerHits = new Map(); // controller index → hit info
+
+    /**
+     * Update controller ray visual based on hit state
+     */
+    function updateControllerRayVisual(controller, hitInfo) {
+      const ray = controller.getObjectByName('ray');
+      if (!ray) return;
+
+      if (hitInfo && hitInfo.hit) {
+        // Hit detected - change to green and extend to hit point
+        ray.material.color.set(0x00ff00);
+        ray.scale.z = hitInfo.distance;
+      } else {
+        // No hit - white ray at default length
+        ray.material.color.set(0xffffff);
+        ray.scale.z = 5;
+      }
+    }
+
     // Double-click to enter orbit mode
     renderer.domElement.addEventListener('dblclick', (e) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -1916,6 +2075,31 @@
           moveVector.applyQuaternion(camera.quaternion);
           moveVector.multiplyScalar(moveSpeed * deltaTime);
           camera.position.add(moveVector);
+        }
+      }
+
+      // VR Controller raycasting (every frame)
+      if (renderer.xr.isPresenting && (controller1 || controller2)) {
+        const holoRenderer = findHoloRenderer();
+
+        if (holoRenderer) {
+          // Raycast from both controllers
+          if (controller1) {
+            const hit1 = raycastControllerPointCloud(controller1);
+            controllerHits.set(0, hit1);
+            updateControllerRayVisual(controller1, hit1);
+          }
+
+          if (controller2) {
+            const hit2 = raycastControllerPointCloud(controller2);
+            controllerHits.set(1, hit2);
+            updateControllerRayVisual(controller2, hit2);
+          }
+
+          // Pass hit data to holoRenderer for shader visualization
+          if (holoRenderer.setControllerHits) {
+            holoRenderer.setControllerHits(controllerHits);
+          }
         }
       }
 

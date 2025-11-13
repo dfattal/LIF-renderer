@@ -45,6 +45,12 @@ uniform vec2 oRes; // viewport resolution in px
 uniform float feathering;
 uniform vec4 background; // background color
 
+// VR Controller hit visualization
+uniform vec4 uControllerHit1; // (uv.x, uv.y, layer, active)
+uniform vec4 uControllerHit2; // (uv.x, uv.y, layer, active)
+uniform float uPatchRadius;   // Gaussian radius
+uniform vec3 uPatchColor;     // Patch color (red)
+
 /*vec4 texture2(sampler2D iChannel, vec2 coord) {
     ivec2 ivec = ivec2(int(coord.x * iRes.x),  // asssuming all input textures are of same size
                        int(coord.y * iRes.y));
@@ -237,6 +243,33 @@ vec4 raycasting(vec2 s2, mat3 FSKR2, vec3 C2, mat3 FSKR1, vec3 C1, sampler2D iCh
     }
 }
 
+// Apply VR controller hit visualization (red Gaussian patches)
+vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex) {
+    // Check controller 1 hit
+    if (uControllerHit1.w > 0.5) { // Active
+        float hitLayer = uControllerHit1.z;
+        if (abs(layerIndex - hitLayer) < 0.1) {
+            vec2 hitUV = uControllerHit1.xy;
+            float dist = length(s1 - hitUV);
+            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
+            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+        }
+    }
+
+    // Check controller 2 hit
+    if (uControllerHit2.w > 0.5) { // Active
+        float hitLayer = uControllerHit2.z;
+        if (abs(layerIndex - hitLayer) < 0.1) {
+            vec2 hitUV = uControllerHit2.xy;
+            float dist = length(s1 - hitUV);
+            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
+            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+        }
+    }
+
+    return color;
+}
+
 void main(void) {
 
     // gl_FragColor = vec4(1.0,0.0,0.0,1.0);
@@ -357,6 +390,15 @@ void main(void) {
         // Blend with the background
         result.rgb = background.rgb * background.a * (1.0 - result.a) + result.rgb;
         result.a = background.a + result.a * (1.0 - background.a); // Blend alpha
+
+        // Apply VR controller hit patches
+        // Note: We apply patches in projector UV space
+        // For stereo, we check both left and right projector layers
+        int numLayersTotal = max(uNumLayersL, uNumLayersR);
+        for (int i = 0; i < 4; i++) {
+            if (i >= numLayersTotal) break;
+            result.rgb = applyControllerPatches(result.rgb, uv, float(i));
+        }
 
         // Apply gamma correction (linear to sRGB conversion)
         result.rgb = linearTosRGB(result.rgb);

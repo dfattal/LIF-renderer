@@ -141,6 +141,12 @@ export class RaycastPlane extends THREE.Mesh {
       f1R: { value: Array(4).fill(500.0) },
       iResR: { value: Array(4).fill(new THREE.Vector2(1280, 800)) },
       uNumLayersR: { value: 0 },
+
+      // VR Controller hit visualization
+      uControllerHit1: { value: new THREE.Vector4(0, 0, 0, 0) }, // (uv.x, uv.y, layer, active)
+      uControllerHit2: { value: new THREE.Vector4(0, 0, 0, 0) }, // (uv.x, uv.y, layer, active)
+      uPatchRadius: { value: 0.05 }, // Gaussian radius (5% of image size)
+      uPatchColor: { value: new THREE.Vector3(1, 0, 0) }, // Red color
     };
   }
 
@@ -754,6 +760,38 @@ export class RaycastPlane extends THREE.Mesh {
    */
   public setFeathering(amount: number): void {
     this.uniforms.feathering.value = amount;
+  }
+
+  /**
+   * Set VR controller hit information for shader visualization
+   * @param hits - Map of controller index → hit info
+   */
+  public setControllerHits(hits: Map<number, any>): void {
+    // Update controller 1 hit uniform
+    const hit1 = hits.get(0);
+    if (hit1 && hit1.hit) {
+      this.uniforms.uControllerHit1.value.set(
+        hit1.uv.x,
+        hit1.uv.y,
+        hit1.layer,
+        1.0 // Active
+      );
+    } else {
+      this.uniforms.uControllerHit1.value.w = 0.0; // Inactive
+    }
+
+    // Update controller 2 hit uniform
+    const hit2 = hits.get(1);
+    if (hit2 && hit2.hit) {
+      this.uniforms.uControllerHit2.value.set(
+        hit2.uv.x,
+        hit2.uv.y,
+        hit2.layer,
+        1.0 // Active
+      );
+    } else {
+      this.uniforms.uControllerHit2.value.w = 0.0; // Inactive
+    }
   }
 
   /**
