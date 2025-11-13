@@ -679,22 +679,28 @@ export class RaycastPlane extends THREE.Mesh {
     // The raycast shader expects both C1 (projector) and C2 (camera) in the same coordinate system
     this.uniforms.uFacePosition.value.set(0, 0, 0);
 
-    // Get raycast plane physical size (in meters)
+    // Get raycast plane ACTUAL physical size (base geometry × scale, in meters)
     const planeGeometry = this.geometry as THREE.PlaneGeometry;
-    const planeWidth = planeGeometry.parameters.width;
-    const planeHeight = planeGeometry.parameters.height;
+    const planeWidth = planeGeometry.parameters.width * this.scale.x;
+    const planeHeight = planeGeometry.parameters.height * this.scale.y;
 
-    // Set oRes AND iResOriginal to the physical plane size
+    // Set oRes AND iResOriginal to the actual scaled plane size
     this.uniforms.oRes.value.set(planeWidth, planeHeight);
     this.uniforms.iResOriginal.value.set(planeWidth, planeHeight);
 
-    // Calculate focal length f2 from camera FOV and plane size
-    // Formula: f2 = (planeHeight / 2) / tan(fov / 2)
-    if ((camera as THREE.PerspectiveCamera).fov) {
-      const fovRadians = THREE.MathUtils.degToRad((camera as THREE.PerspectiveCamera).fov);
-      this.uniforms.f2.value = (planeHeight / 2) / Math.tan(fovRadians / 2);
+    // Calculate focal length f2 from actual plane geometry and distance
+    // For a plane at distance d with height h, if the camera sees the full plane:
+    // tan(fov/2) = (h/2) / d, so f2 = d (for symmetric frustum)
+    // For VR asymmetric frustums, we derive f2 from projection matrix:
+    const fovTanAngles = this.computeFovTanAngles(camera);
+    const tanHalfFovY = (fovTanAngles.tanUp - fovTanAngles.tanDown) / 2;
+
+    // f2 = (planeHeight / 2) / tan(halfFovY)
+    // This ensures f2 matches the actual camera-to-plane geometry
+    if (tanHalfFovY > 0.0001) {
+      this.uniforms.f2.value = (planeHeight / 2) / tanHalfFovY;
     } else {
-      // Fallback if not a perspective camera
+      // Fallback
       this.uniforms.f2.value = this.planeDistance;
     }
 
