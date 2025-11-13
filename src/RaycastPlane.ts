@@ -441,11 +441,6 @@ export class RaycastPlane extends THREE.Mesh {
     // Update frustum offsets for asymmetric frustums
     this.frustumOffsetX = this.planeDistance * (fovTanAngles.tanRight + fovTanAngles.tanLeft) / 2;
     this.frustumOffsetY = this.planeDistance * (fovTanAngles.tanUp + fovTanAngles.tanDown) / 2;
-
-    // Optional debug logging
-    if (eyeLabel) {
-      console.log(`${eyeLabel}: Dynamic frustum update - scale=(${this.scale.x.toFixed(3)}, ${this.scale.y.toFixed(3)}), offset=(${this.frustumOffsetX.toFixed(2)}m, ${this.frustumOffsetY.toFixed(2)}m)`);
-    }
   }
 
   /**
@@ -776,6 +771,11 @@ export class RaycastPlane extends THREE.Mesh {
         hit1.layer,
         1.0 // Active
       );
+      console.log('[Shader] Controller 1 uniform set:', {
+        uv: `(${hit1.uv.x.toFixed(3)}, ${hit1.uv.y.toFixed(3)})`,
+        layer: hit1.layer,
+        radius: this.uniforms.uPatchRadius.value
+      });
     } else {
       this.uniforms.uControllerHit1.value.w = 0.0; // Inactive
     }
@@ -789,6 +789,11 @@ export class RaycastPlane extends THREE.Mesh {
         hit2.layer,
         1.0 // Active
       );
+      console.log('[Shader] Controller 2 uniform set:', {
+        uv: `(${hit2.uv.x.toFixed(3)}, ${hit2.uv.y.toFixed(3)})`,
+        layer: hit2.layer,
+        radius: this.uniforms.uPatchRadius.value
+      });
     } else {
       this.uniforms.uControllerHit2.value.w = 0.0; // Inactive
     }

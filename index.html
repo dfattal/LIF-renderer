@@ -2078,22 +2078,54 @@
         }
       }
 
-      // VR Controller raycasting (every frame)
+      // VR Controller raycasting (only when trigger pressed)
       if (renderer.xr.isPresenting && (controller1 || controller2)) {
         const holoRenderer = findHoloRenderer();
 
         if (holoRenderer) {
-          // Raycast from both controllers
-          if (controller1) {
+          // Raycast from controllers when trigger is pressed
+          if (controller1 && controller1.userData.isSelecting) {
             const hit1 = raycastControllerPointCloud(controller1);
             controllerHits.set(0, hit1);
             updateControllerRayVisual(controller1, hit1);
+
+            // Debug logging when trigger pressed
+            if (hit1 && hit1.hit) {
+              console.log('[Controller 1] HIT:', {
+                layer: hit1.layer,
+                uv: `(${hit1.uv.x.toFixed(3)}, ${hit1.uv.y.toFixed(3)})`,
+                distance: `${hit1.distance.toFixed(2)}m`,
+                point: `(${hit1.point.x.toFixed(2)}, ${hit1.point.y.toFixed(2)}, ${hit1.point.z.toFixed(2)})`
+              });
+            } else {
+              console.log('[Controller 1] NO HIT');
+            }
+          } else if (controller1) {
+            // Clear hit when trigger not pressed
+            controllerHits.set(0, null);
+            updateControllerRayVisual(controller1, null);
           }
 
-          if (controller2) {
+          if (controller2 && controller2.userData.isSelecting) {
             const hit2 = raycastControllerPointCloud(controller2);
             controllerHits.set(1, hit2);
             updateControllerRayVisual(controller2, hit2);
+
+            // Debug logging when trigger pressed
+            if (hit2 && hit2.hit) {
+              console.log('[Controller 2] HIT:', {
+                layer: hit2.layer,
+                uv: `(${hit2.uv.x.toFixed(3)}, ${hit2.uv.y.toFixed(3)})`,
+                distance: `${hit2.distance.toFixed(2)}m`,
+                point: `(${hit2.point.x.toFixed(2)}, ${hit2.point.y.toFixed(2)}, ${hit2.point.z.toFixed(2)})`
+              });
+            } else {
+              console.log('[Controller 2] NO HIT');
+            }
+          } else if (controller2) {
+            // Clear hit when trigger not pressed
+            controllerHits.set(1, null);
+            updateControllerRayVisual(controller2, null);
           }
 
           // Pass hit data to holoRenderer for shader visualization
