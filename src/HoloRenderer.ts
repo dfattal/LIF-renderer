@@ -478,28 +478,21 @@ export class HoloRenderer extends THREE.Mesh {
           const viewerPose = xrFrame.getPose(this.xrViewerSpace, renderer.xr.getReferenceSpace()!);
           if (viewerPose) {
             // Extract position and orientation from XR transform
-            const {position, orientation} = viewerPose.transform;
+            const t = viewerPose.transform;
 
-            // Create THREE.js matrix from XR pose (position + orientation)
-            const viewerMatrix = new THREE.Matrix4();
-            const pos = new THREE.Vector3(position.x, position.y, position.z);
-            const quat = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-            viewerMatrix.compose(pos, quat, new THREE.Vector3(1, 1, 1));
+            // Directly set position and quaternion (NOT using matrices!)
+            // This is the canonical WebXR pattern
+            this.raycastPlaneLeft.position.set(t.position.x, t.position.y, t.position.z);
+            this.raycastPlaneLeft.quaternion.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
 
-            // Build local offset matrix (HUD offset from head)
-            const localOffset = new THREE.Matrix4().makeTranslation(
-              this.raycastPlaneLeft.frustumOffsetX,
-              this.raycastPlaneLeft.frustumOffsetY,
-              -this.raycastPlaneLeft.planeDistance
-            );
+            // Apply local offset (HUD distance from head)
+            // translateZ moves in local space, so negative = forward
+            this.raycastPlaneLeft.translateX(this.raycastPlaneLeft.frustumOffsetX);
+            this.raycastPlaneLeft.translateY(this.raycastPlaneLeft.frustumOffsetY);
+            this.raycastPlaneLeft.translateZ(-this.raycastPlaneLeft.planeDistance);
 
-            // Combine: planeWorld = viewerWorld * localOffset
-            const planeMatrix = new THREE.Matrix4().multiplyMatrices(viewerMatrix, localOffset);
-
-            // Apply to plane (disable auto-update to use manual matrix)
-            this.raycastPlaneLeft.matrixAutoUpdate = false;
-            this.raycastPlaneLeft.matrix.copy(planeMatrix);
-            this.raycastPlaneLeft.matrixWorld.copy(planeMatrix);
+            // Re-enable auto-update for normal transform handling
+            this.raycastPlaneLeft.matrixAutoUpdate = true;
           }
         } catch (e) {
           console.warn('Could not get viewer pose for left plane:', e);
@@ -536,28 +529,21 @@ export class HoloRenderer extends THREE.Mesh {
           const viewerPose = xrFrame.getPose(this.xrViewerSpace, renderer.xr.getReferenceSpace()!);
           if (viewerPose) {
             // Extract position and orientation from XR transform
-            const {position, orientation} = viewerPose.transform;
+            const t = viewerPose.transform;
 
-            // Create THREE.js matrix from XR pose (position + orientation)
-            const viewerMatrix = new THREE.Matrix4();
-            const pos = new THREE.Vector3(position.x, position.y, position.z);
-            const quat = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-            viewerMatrix.compose(pos, quat, new THREE.Vector3(1, 1, 1));
+            // Directly set position and quaternion (NOT using matrices!)
+            // This is the canonical WebXR pattern
+            this.raycastPlaneRight.position.set(t.position.x, t.position.y, t.position.z);
+            this.raycastPlaneRight.quaternion.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
 
-            // Build local offset matrix (HUD offset from head)
-            const localOffset = new THREE.Matrix4().makeTranslation(
-              this.raycastPlaneRight.frustumOffsetX,
-              this.raycastPlaneRight.frustumOffsetY,
-              -this.raycastPlaneRight.planeDistance
-            );
+            // Apply local offset (HUD distance from head)
+            // translateZ moves in local space, so negative = forward
+            this.raycastPlaneRight.translateX(this.raycastPlaneRight.frustumOffsetX);
+            this.raycastPlaneRight.translateY(this.raycastPlaneRight.frustumOffsetY);
+            this.raycastPlaneRight.translateZ(-this.raycastPlaneRight.planeDistance);
 
-            // Combine: planeWorld = viewerWorld * localOffset
-            const planeMatrix = new THREE.Matrix4().multiplyMatrices(viewerMatrix, localOffset);
-
-            // Apply to plane (disable auto-update to use manual matrix)
-            this.raycastPlaneRight.matrixAutoUpdate = false;
-            this.raycastPlaneRight.matrix.copy(planeMatrix);
-            this.raycastPlaneRight.matrixWorld.copy(planeMatrix);
+            // Re-enable auto-update for normal transform handling
+            this.raycastPlaneRight.matrixAutoUpdate = true;
           }
         } catch (e) {
           console.warn('Could not get viewer pose for right plane:', e);
