@@ -469,20 +469,24 @@ export class HoloRenderer extends THREE.Mesh {
         console.log('Left plane re-added to scene');
       }
 
-      // Get XRFrame to query viewer reference space transform
+      // Get viewer pose in local-floor reference space for head-locked positioning
       const xrFrame = renderer.xr.getFrame();
       if (xrFrame && this.xrViewerSpace) {
         try {
-          // Get the transform from local-floor to viewer space
-          const viewerPose = xrFrame.getViewerPose(renderer.xr.getReferenceSpace()!);
+          // Get the pose of viewer space relative to local-floor reference space
+          // This gives us the head position/rotation with zero lag
+          const viewerPose = xrFrame.getPose(this.xrViewerSpace, renderer.xr.getReferenceSpace()!);
           if (viewerPose) {
-            // Viewer transform gives us head position/rotation in local-floor space
-            const viewMatrix = viewerPose.transform.matrix;
+            // Extract position and orientation from XR transform
+            const {position, orientation} = viewerPose.transform;
 
-            // Create THREE.js matrix from XR matrix (column-major)
-            const viewerMatrix = new THREE.Matrix4().fromArray(viewMatrix);
+            // Create THREE.js matrix from XR pose (position + orientation)
+            const viewerMatrix = new THREE.Matrix4();
+            const pos = new THREE.Vector3(position.x, position.y, position.z);
+            const quat = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+            viewerMatrix.compose(pos, quat, new THREE.Vector3(1, 1, 1));
 
-            // Build local offset matrix
+            // Build local offset matrix (HUD offset from head)
             const localOffset = new THREE.Matrix4().makeTranslation(
               this.raycastPlaneLeft.frustumOffsetX,
               this.raycastPlaneLeft.frustumOffsetY,
@@ -492,13 +496,13 @@ export class HoloRenderer extends THREE.Mesh {
             // Combine: planeWorld = viewerWorld * localOffset
             const planeMatrix = new THREE.Matrix4().multiplyMatrices(viewerMatrix, localOffset);
 
-            // Apply to plane
-            this.raycastPlaneLeft.matrix.copy(planeMatrix);
+            // Apply to plane (disable auto-update to use manual matrix)
             this.raycastPlaneLeft.matrixAutoUpdate = false;
+            this.raycastPlaneLeft.matrix.copy(planeMatrix);
             this.raycastPlaneLeft.matrixWorld.copy(planeMatrix);
           }
         } catch (e) {
-          console.warn('Could not get viewer pose:', e);
+          console.warn('Could not get viewer pose for left plane:', e);
         }
       }
 
@@ -523,20 +527,24 @@ export class HoloRenderer extends THREE.Mesh {
         console.log('Right plane re-added to scene');
       }
 
-      // Get XRFrame to query viewer reference space transform
+      // Get viewer pose in local-floor reference space for head-locked positioning
       const xrFrame = renderer.xr.getFrame();
       if (xrFrame && this.xrViewerSpace) {
         try {
-          // Get the transform from local-floor to viewer space
-          const viewerPose = xrFrame.getViewerPose(renderer.xr.getReferenceSpace()!);
+          // Get the pose of viewer space relative to local-floor reference space
+          // This gives us the head position/rotation with zero lag
+          const viewerPose = xrFrame.getPose(this.xrViewerSpace, renderer.xr.getReferenceSpace()!);
           if (viewerPose) {
-            // Viewer transform gives us head position/rotation in local-floor space
-            const viewMatrix = viewerPose.transform.matrix;
+            // Extract position and orientation from XR transform
+            const {position, orientation} = viewerPose.transform;
 
-            // Create THREE.js matrix from XR matrix (column-major)
-            const viewerMatrix = new THREE.Matrix4().fromArray(viewMatrix);
+            // Create THREE.js matrix from XR pose (position + orientation)
+            const viewerMatrix = new THREE.Matrix4();
+            const pos = new THREE.Vector3(position.x, position.y, position.z);
+            const quat = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+            viewerMatrix.compose(pos, quat, new THREE.Vector3(1, 1, 1));
 
-            // Build local offset matrix
+            // Build local offset matrix (HUD offset from head)
             const localOffset = new THREE.Matrix4().makeTranslation(
               this.raycastPlaneRight.frustumOffsetX,
               this.raycastPlaneRight.frustumOffsetY,
@@ -546,13 +554,13 @@ export class HoloRenderer extends THREE.Mesh {
             // Combine: planeWorld = viewerWorld * localOffset
             const planeMatrix = new THREE.Matrix4().multiplyMatrices(viewerMatrix, localOffset);
 
-            // Apply to plane
-            this.raycastPlaneRight.matrix.copy(planeMatrix);
+            // Apply to plane (disable auto-update to use manual matrix)
             this.raycastPlaneRight.matrixAutoUpdate = false;
+            this.raycastPlaneRight.matrix.copy(planeMatrix);
             this.raycastPlaneRight.matrixWorld.copy(planeMatrix);
           }
         } catch (e) {
-          console.warn('Could not get viewer pose:', e);
+          console.warn('Could not get viewer pose for right plane:', e);
         }
       }
 
