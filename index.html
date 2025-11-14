@@ -1921,7 +1921,7 @@
         xrSession.addEventListener('end', () => {
           cleanupControllers();
 
-          // Clean up XR raycast planes
+          // Clean up XR raycast planes and quad layers
           const holoRenderer = findHoloRenderer();
           if (holoRenderer) {
             holoRenderer.cleanupXR();
@@ -1948,6 +1948,8 @@
 
           xrSession = null;
           xrRefSpace = null;
+          xrViewerSpace = null;
+          xrQuadLayersInitialized = false; // Reset flag for next session
           xrButton.textContent = 'Enter VR';
           xrButton.style.background = '#0066ff';
           xrStatus.textContent = 'XR Ready';
@@ -2101,6 +2103,7 @@
     let frameCount = 0;
     let fpsFrameCount = 0;
     let fpsUpdateTime = 0;
+    let xrQuadLayersInitialized = false; // Track if XR quad layers have been initialized
 
     renderer.setAnimationLoop((time) => {
       const deltaTime = (time - lastTime) / 1000;
@@ -2133,6 +2136,39 @@
               loadedProjectors.forEach(p => {
                 p.position.y = initialY;
               });
+
+              // Initialize XR Quad Layers with viewer reference space (zero-lag head tracking)
+              if (!xrQuadLayersInitialized && xrSession && xrViewerSpace) {
+                xrQuadLayersInitialized = true;
+                console.log('[XR Init] Initializing quad layers with viewer reference space...');
+
+                const holoRenderer = findHoloRenderer();
+                if (holoRenderer) {
+                  // Get all projectors
+                  const allProjectors = loadedProjectors.length > 0 ? loadedProjectors : (projector ? [projector] : []);
+
+                  if (allProjectors.length > 0) {
+                    holoRenderer.initializeXRQuadLayers(
+                      xrSession,
+                      renderer,
+                      allProjectors,
+                      leftCam,
+                      rightCam
+                    ).then(() => {
+                      console.log('[XR Init] Quad layers initialized successfully - zero-lag head tracking enabled!');
+                    }).catch((err) => {
+                      console.error('[XR Init] Failed to initialize quad layers:', err);
+                      xrQuadLayersInitialized = false; // Allow retry
+                    });
+                  } else {
+                    console.warn('[XR Init] No projectors available for quad layer initialization');
+                    xrQuadLayersInitialized = false; // Allow retry
+                  }
+                } else {
+                  console.warn('[XR Init] HoloRenderer not found');
+                  xrQuadLayersInitialized = false; // Allow retry
+                }
+              }
             } else {
               console.log('InitialY candidate', candidateY.toFixed(3), 'm too low, retrying...');
             }

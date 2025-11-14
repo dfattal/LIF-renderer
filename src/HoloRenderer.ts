@@ -49,6 +49,14 @@ export class HoloRenderer extends THREE.Mesh {
   private isXRInitialized: boolean = false;
   private xrViewerSpace: XRReferenceSpace | null = null; // Viewer reference space for head-locked HUD
 
+  // XR Quad Layers (WebXR Layers API for zero-lag head tracking)
+  private xrGLBinding: XRWebGLBinding | null = null;
+  private xrQuadLayerLeft: XRQuadLayer | null = null;
+  private xrQuadLayerRight: XRQuadLayer | null = null;
+  private xrRenderTargetLeft: THREE.WebGLRenderTarget | null = null;
+  private xrRenderTargetRight: THREE.WebGLRenderTarget | null = null;
+  private xrSession: XRSession | null = null;
+
   // VR Controller raycasting
   private controllerHits: Map<number, any> = new Map(); // controller index → hit info
 
@@ -325,6 +333,7 @@ export class HoloRenderer extends THREE.Mesh {
 
   /**
    * Render in XR mode with per-eye raycast planes
+   * Uses XRQuadLayers with viewer reference space for zero-lag head tracking
    */
   private async renderXR(
     projectors: HoloProjector[],
@@ -345,6 +354,138 @@ export class HoloRenderer extends THREE.Mesh {
     const leftCamera = xrCamera.cameras[0];
     const rightCamera = xrCamera.cameras[1];
 
+    // NEW PATH: Use XRQuadLayers with viewer reference space (zero-lag)
+    if (this.xrGLBinding && this.xrQuadLayerLeft && this.xrQuadLayerRight) {
+      await this.renderXRWithQuadLayers(projectors, leftCamera, rightCamera, renderer, scene);
+      return;
+    }
+
+    // FALLBACK: Old path with manual positioning (has lag)
+    console.log('[XR] Using fallback rendering (manual positioning - may have lag)');
+    await this.renderXRLegacy(projectors, leftCamera, rightCamera, renderer, scene);
+  }
+
+  /**
+   * NEW: Render XR using XRQuadLayers with viewer reference space (zero-lag)
+   */
+  private async renderXRWithQuadLayers(
+    projectors: HoloProjector[],
+    leftCamera: THREE.Camera,
+    rightCamera: THREE.Camera,
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+  ) {
+    if (!this.xrGLBinding || !this.xrQuadLayerLeft || !this.xrQuadLayerRight) {
+      console.error('[XR Quad Layers] Not initialized!');
+      return;
+    }
+
+    if (!this.raycastPlaneLeft || !this.raycastPlaneRight) {
+      console.error('[XR Quad Layers] Raycast planes not initialized!');
+      return;
+    }
+
+    const xrFrame = renderer.xr.getFrame();
+    if (!xrFrame) {
+      console.warn('[XR Quad Layers] No XR frame available');
+      return;
+    }
+
+    // Update frustum dimensions from camera projection matrices (dynamic eye tracking support)
+    this.raycastPlaneLeft.updateFrustumFromCamera(leftCamera, 'left');
+    this.raycastPlaneRight.updateFrustumFromCamera(rightCamera, 'right');
+
+    // Update layer dimensions if frustum changed (e.g., eye tracking, dynamic foveation)
+    if (this.xrQuadLayerLeft.needsRedraw) {
+      const planeDistance = this.raycastPlaneLeft.planeDistance;
+      const fovTanAngles = this.raycastPlaneLeft.computeFovTanAngles(leftCamera);
+      const width = planeDistance * (fovTanAngles.tanRight - fovTanAngles.tanLeft);
+      const height = planeDistance * (fovTanAngles.tanUp - fovTanAngles.tanDown);
+      this.xrQuadLayerLeft.width = width;
+      this.xrQuadLayerLeft.height = height;
+    }
+
+    if (this.xrQuadLayerRight.needsRedraw) {
+      const planeDistance = this.raycastPlaneRight.planeDistance;
+      const fovTanAngles = this.raycastPlaneRight.computeFovTanAngles(rightCamera);
+      const width = planeDistance * (fovTanAngles.tanRight - fovTanAngles.tanLeft);
+      const height = planeDistance * (fovTanAngles.tanUp - fovTanAngles.tanDown);
+      this.xrQuadLayerRight.width = width;
+      this.xrQuadLayerRight.height = height;
+    }
+
+    // Update shader uniforms (projector poses, focal length, etc.)
+    this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
+    this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
+
+    this.raycastPlaneRight.updateProjectorPoses(rightCamera);
+    this.raycastPlaneRight.updateDynamicUniforms(rightCamera, renderer);
+
+    // Update controller hits for shader visualization
+    if (this.controllerHits.size > 0) {
+      this.raycastPlaneLeft.setControllerHits(this.controllerHits);
+      this.raycastPlaneRight.setControllerHits(this.controllerHits);
+    }
+
+    // Render LEFT eye to quad layer texture
+    const glSubImageLeft = this.xrGLBinding.getSubImage(this.xrQuadLayerLeft, xrFrame);
+    if (glSubImageLeft && glSubImageLeft.colorTexture) {
+      // Wrap XR texture in THREE.WebGLRenderTarget
+      const xrTextureLeft = new THREE.WebGLRenderTarget(
+        glSubImageLeft.colorTexture.width,
+        glSubImageLeft.colorTexture.height
+      );
+
+      // HACK: Replace render target's texture with XR layer texture
+      const gl = renderer.getContext() as WebGL2RenderingContext;
+      const properties = (renderer as any).properties;
+      const renderTargetProperties = properties.get(xrTextureLeft);
+      renderTargetProperties.__webglTexture = glSubImageLeft.colorTexture;
+
+      // Render raycast plane to XR texture
+      renderer.setRenderTarget(xrTextureLeft);
+      renderer.render(this.raycastPlaneLeft, leftCamera);
+    }
+
+    // Render RIGHT eye to quad layer texture
+    const glSubImageRight = this.xrGLBinding.getSubImage(this.xrQuadLayerRight, xrFrame);
+    if (glSubImageRight && glSubImageRight.colorTexture) {
+      // Wrap XR texture in THREE.WebGLRenderTarget
+      const xrTextureRight = new THREE.WebGLRenderTarget(
+        glSubImageRight.colorTexture.width,
+        glSubImageRight.colorTexture.height
+      );
+
+      // HACK: Replace render target's texture with XR layer texture
+      const gl = renderer.getContext() as WebGL2RenderingContext;
+      const properties = (renderer as any).properties;
+      const renderTargetProperties = properties.get(xrTextureRight);
+      renderTargetProperties.__webglTexture = glSubImageRight.colorTexture;
+
+      // Render raycast plane to XR texture
+      renderer.setRenderTarget(xrTextureRight);
+      renderer.render(this.raycastPlaneRight, rightCamera);
+    }
+
+    // Reset render target for normal scene rendering
+    renderer.setRenderTarget(null);
+
+    // Hide the mesh geometry when in XR raytracing mode
+    if (this.geometry !== new THREE.BufferGeometry()) {
+      this.geometry = new THREE.BufferGeometry();
+    }
+  }
+
+  /**
+   * LEGACY: Render XR with manual positioning (has lag due to getPose updates)
+   */
+  private async renderXRLegacy(
+    projectors: HoloProjector[],
+    leftCamera: THREE.Camera,
+    rightCamera: THREE.Camera,
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+  ) {
     // Set camera layers for per-eye rendering
     // Enable both the eye-specific layer AND layer 0 (for controllers and other THREE.js geometry)
     leftCamera.layers.disableAll();
@@ -769,7 +910,7 @@ export class HoloRenderer extends THREE.Mesh {
   }
 
   /**
-   * Clean up XR raycast planes when exiting VR mode
+   * Clean up XR raycast planes and quad layers when exiting VR mode
    */
   public cleanupXR(): void {
     if (this.raycastPlaneLeft) {
@@ -784,9 +925,25 @@ export class HoloRenderer extends THREE.Mesh {
       this.raycastPlaneRight = null;
     }
 
+    // Clean up XR quad layers
+    if (this.xrRenderTargetLeft) {
+      this.xrRenderTargetLeft.dispose();
+      this.xrRenderTargetLeft = null;
+    }
+
+    if (this.xrRenderTargetRight) {
+      this.xrRenderTargetRight.dispose();
+      this.xrRenderTargetRight = null;
+    }
+
+    this.xrQuadLayerLeft = null;
+    this.xrQuadLayerRight = null;
+    this.xrGLBinding = null;
+    this.xrSession = null;
+
     this.isXRInitialized = false;
     this.xrViewerSpace = null;
-    console.log('XR raycast planes cleaned up');
+    console.log('XR raycast planes and quad layers cleaned up');
   }
 
   /**
@@ -795,6 +952,140 @@ export class HoloRenderer extends THREE.Mesh {
   public setViewerReferenceSpace(viewerSpace: XRReferenceSpace): void {
     this.xrViewerSpace = viewerSpace;
     console.log('Viewer reference space set for HUD raycast planes');
+  }
+
+  /**
+   * Initialize XR Quad Layers with viewer reference space for zero-lag head tracking
+   * Call this when XR session starts
+   */
+  public async initializeXRQuadLayers(
+    session: XRSession,
+    renderer: THREE.WebGLRenderer,
+    projectors: HoloProjector[],
+    leftCamera: THREE.Camera,
+    rightCamera: THREE.Camera
+  ): Promise<void> {
+    console.log('[XR Quad Layers] Initializing with viewer reference space...');
+
+    this.xrSession = session;
+
+    // Get viewer reference space (already set via setViewerReferenceSpace)
+    if (!this.xrViewerSpace) {
+      console.error('[XR Quad Layers] Viewer reference space not set!');
+      return;
+    }
+
+    // Create XRWebGLBinding
+    const gl = renderer.getContext() as WebGL2RenderingContext;
+    this.xrGLBinding = new XRWebGLBinding(session, gl);
+    console.log('[XR Quad Layers] XRWebGLBinding created');
+
+    // Get texture resolution (2048x2048 per eye for high quality)
+    const textureWidth = 2048;
+    const textureHeight = 2048;
+
+    // Create LEFT quad layer with viewer space
+    this.xrQuadLayerLeft = this.xrGLBinding.createQuadLayer({
+      space: this.xrViewerSpace,
+      viewPixelWidth: textureWidth,
+      viewPixelHeight: textureHeight,
+      layout: 'mono',
+    });
+
+    // Create RIGHT quad layer with viewer space
+    this.xrQuadLayerRight = this.xrGLBinding.createQuadLayer({
+      space: this.xrViewerSpace,
+      viewPixelWidth: textureWidth,
+      viewPixelHeight: textureHeight,
+      layout: 'mono',
+    });
+
+    console.log('[XR Quad Layers] Quad layers created with viewer space');
+
+    // Initialize raycast planes for rendering (not added to scene, just for geometry/shaders)
+    if (!this.raycastPlaneLeft) {
+      const stereoData = (window as any).lifStereoRenderData;
+      const invd = stereoData ? (stereoData.invd ?? stereoData.inv_convergence_distance) : undefined;
+
+      // Create and initialize left plane
+      this.raycastPlaneLeft = new RaycastPlane(1, 1);
+      await this.raycastPlaneLeft.initializeFromProjector(projectors, invd);
+      this.raycastPlaneLeft.updatePlaneSizeFromCamera(leftCamera, 'LEFT EYE');
+
+      // Check if desktop is in stereo mode
+      const desktopInStereoMode = this.raycastPlane && this.raycastPlane.getViewMode() === 'stereo';
+      if (desktopInStereoMode && projectors.length >= 2) {
+        await this.raycastPlaneLeft.toggleViewMode();
+        console.log('[XR Quad Layers] Left plane in STEREO mode');
+      }
+
+      // Create and initialize right plane
+      this.raycastPlaneRight = new RaycastPlane(1, 1);
+      await this.raycastPlaneRight.initializeFromProjector(projectors, invd);
+      this.raycastPlaneRight.updatePlaneSizeFromCamera(rightCamera, 'RIGHT EYE');
+
+      if (desktopInStereoMode && projectors.length >= 2) {
+        await this.raycastPlaneRight.toggleViewMode();
+        console.log('[XR Quad Layers] Right plane in STEREO mode');
+      }
+
+      console.log('[XR Quad Layers] Raycast planes initialized for texture rendering');
+    }
+
+    // Calculate dimensions and position from FOV
+    const planeDistance = this.raycastPlaneLeft!.planeDistance;
+    const fovTanAnglesLeft = this.raycastPlaneLeft!.computeFovTanAngles(leftCamera);
+    const fovTanAnglesRight = this.raycastPlaneRight!.computeFovTanAngles(rightCamera);
+
+    // Left layer dimensions and transform
+    const widthLeft = planeDistance * (fovTanAnglesLeft.tanRight - fovTanAnglesLeft.tanLeft);
+    const heightLeft = planeDistance * (fovTanAnglesLeft.tanUp - fovTanAnglesLeft.tanDown);
+    const offsetXLeft = planeDistance * (fovTanAnglesLeft.tanRight + fovTanAnglesLeft.tanLeft) / 2;
+    const offsetYLeft = planeDistance * (fovTanAnglesLeft.tanUp + fovTanAnglesLeft.tanDown) / 2;
+
+    this.xrQuadLayerLeft.width = widthLeft;
+    this.xrQuadLayerLeft.height = heightLeft;
+    this.xrQuadLayerLeft.transform = new XRRigidTransform(
+      { x: offsetXLeft, y: offsetYLeft, z: -planeDistance },
+      { x: 0, y: 0, z: 0, w: 1 }
+    );
+
+    // Store offsets for shader uniform updates
+    this.raycastPlaneLeft!.frustumOffsetX = offsetXLeft;
+    this.raycastPlaneLeft!.frustumOffsetY = offsetYLeft;
+
+    console.log(`[XR Quad Layers] Left: ${widthLeft.toFixed(2)}m x ${heightLeft.toFixed(2)}m at offset (${offsetXLeft.toFixed(2)}, ${offsetYLeft.toFixed(2)})`);
+
+    // Right layer dimensions and transform
+    const widthRight = planeDistance * (fovTanAnglesRight.tanRight - fovTanAnglesRight.tanLeft);
+    const heightRight = planeDistance * (fovTanAnglesRight.tanUp - fovTanAnglesRight.tanDown);
+    const offsetXRight = planeDistance * (fovTanAnglesRight.tanRight + fovTanAnglesRight.tanLeft) / 2;
+    const offsetYRight = planeDistance * (fovTanAnglesRight.tanUp + fovTanAnglesRight.tanDown) / 2;
+
+    this.xrQuadLayerRight.width = widthRight;
+    this.xrQuadLayerRight.height = heightRight;
+    this.xrQuadLayerRight.transform = new XRRigidTransform(
+      { x: offsetXRight, y: offsetYRight, z: -planeDistance },
+      { x: 0, y: 0, z: 0, w: 1 }
+    );
+
+    // Store offsets for shader uniform updates
+    this.raycastPlaneRight!.frustumOffsetX = offsetXRight;
+    this.raycastPlaneRight!.frustumOffsetY = offsetYRight;
+
+    console.log(`[XR Quad Layers] Right: ${widthRight.toFixed(2)}m x ${heightRight.toFixed(2)}m at offset (${offsetXRight.toFixed(2)}, ${offsetYRight.toFixed(2)})`);
+
+    // Get the existing projection layer (for scene content)
+    const baseLayer = session.renderState.baseLayer;
+
+    // Update render state with quad layers + projection layer
+    // Order matters: quad layers first (background), then projection layer (foreground with controllers)
+    await session.updateRenderState({
+      layers: [this.xrQuadLayerLeft, this.xrQuadLayerRight, baseLayer as any]
+    });
+
+    console.log('[XR Quad Layers] Render state updated with quad layers + projection layer');
+    console.log('[XR Quad Layers] Initialization complete - zero-lag head tracking enabled!');
   }
 
   /**
