@@ -169,6 +169,37 @@ float weight2(vec3 C, vec3 C1, vec3 C2) {
 
 }
 
+// Apply VR controller hit visualization (red Gaussian patches)
+vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex) {
+    // Check controller 1 hit
+    if (uControllerHit1.w > 0.5) { // Active
+        float hitLayer = uControllerHit1.z;
+        if (abs(layerIndex - hitLayer) < 0.1) {
+            // Convert hitUV from [0,1] space to [-0.5, 0.5] centered space (same as s1)
+            // Flip Y sign to match s1 coordinate system
+            vec2 hitUV = vec2(uControllerHit1.x - 0.5, -(uControllerHit1.y - 0.5));
+            float dist = length(s1 - hitUV);
+            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
+            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+        }
+    }
+
+    // Check controller 2 hit
+    if (uControllerHit2.w > 0.5) { // Active
+        float hitLayer = uControllerHit2.z;
+        if (abs(layerIndex - hitLayer) < 0.1) {
+            // Convert hitUV from [0,1] space to [-0.5, 0.5] centered space (same as s1)
+            // Flip Y sign to match s1 coordinate system
+            vec2 hitUV = vec2(uControllerHit2.x - 0.5, -(uControllerHit2.y - 0.5));
+            float dist = length(s1 - hitUV);
+            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
+            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+        }
+    }
+
+    return color;
+}
+
 // Action !
 vec4 raycasting(vec2 s2, mat3 FSKR2, vec3 C2, mat3 FSKR1, vec3 C1, sampler2D iChannelCol, sampler2D iChannelDisp, float invZmin, float invZmax, vec2 iRes, float t, out float invZ2, out float confidence) {
 
@@ -234,40 +265,19 @@ vec4 raycasting(vec2 s2, mat3 FSKR2, vec3 C2, mat3 FSKR1, vec3 C1, sampler2D iCh
 //
         if(isMaskAround(s1 + .5, iChannelDisp, iRes))
             return vec4(0.0); // option b) original. 0.0 - masked pixel
-        return vec4(readColor(iChannelCol, s1 + .5), taper(s1 + .5)); // 1.0 - non masked pixel
+
+        // Read color and apply controller patches
+        vec3 color = readColor(iChannelCol, s1 + .5);
+        // Note: layerIndex would need to be passed to this function to apply patches correctly
+        // For now, apply patches assuming layer 0
+        color = applyControllerPatches(color, s1, 0.0);
+        return vec4(color, taper(s1 + .5)); // 1.0 - non masked pixel
         // return vec4(readColor(iChannelCol, s1 + .5), taper(s1 + .5) * isMaskAround_get_val(s1 + .5, iChannelDisp, iRes));
     } else {
         invZ2 = 0.0;
         // confidence = 0.0;
         return vec4(background.rgb, 0.0);
     }
-}
-
-// Apply VR controller hit visualization (red Gaussian patches)
-vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex) {
-    // Check controller 1 hit
-    if (uControllerHit1.w > 0.5) { // Active
-        float hitLayer = uControllerHit1.z;
-        if (abs(layerIndex - hitLayer) < 0.1) {
-            vec2 hitUV = uControllerHit1.xy;
-            float dist = length(s1 - hitUV);
-            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
-            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
-        }
-    }
-
-    // Check controller 2 hit
-    if (uControllerHit2.w > 0.5) { // Active
-        float hitLayer = uControllerHit2.z;
-        if (abs(layerIndex - hitLayer) < 0.1) {
-            vec2 hitUV = uControllerHit2.xy;
-            float dist = length(s1 - hitUV);
-            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
-            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
-        }
-    }
-
-    return color;
 }
 
 void main(void) {
@@ -390,15 +400,6 @@ void main(void) {
         // Blend with the background
         result.rgb = background.rgb * background.a * (1.0 - result.a) + result.rgb;
         result.a = background.a + result.a * (1.0 - background.a); // Blend alpha
-
-        // Apply VR controller hit patches
-        // Note: We apply patches in projector UV space
-        // For stereo, we check both left and right projector layers
-        int numLayersTotal = max(uNumLayersL, uNumLayersR);
-        for (int i = 0; i < 4; i++) {
-            if (i >= numLayersTotal) break;
-            result.rgb = applyControllerPatches(result.rgb, uv, float(i));
-        }
 
         // Apply gamma correction (linear to sRGB conversion)
         result.rgb = linearTosRGB(result.rgb);

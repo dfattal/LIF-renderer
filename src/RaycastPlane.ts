@@ -145,7 +145,7 @@ export class RaycastPlane extends THREE.Mesh {
       // VR Controller hit visualization
       uControllerHit1: { value: new THREE.Vector4(0, 0, 0, 0) }, // (uv.x, uv.y, layer, active)
       uControllerHit2: { value: new THREE.Vector4(0, 0, 0, 0) }, // (uv.x, uv.y, layer, active)
-      uPatchRadius: { value: 0.05 }, // Gaussian radius (5% of image size)
+      uPatchRadius: { value: 0.03 }, // Gaussian radius in normalized texture space
       uPatchColor: { value: new THREE.Vector3(1, 0, 0) }, // Red color
     };
   }

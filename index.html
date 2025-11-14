@@ -930,7 +930,10 @@
      */
     function raycastControllerPointCloud(controller) {
       const holoRenderer = findHoloRenderer();
-      if (!holoRenderer) return null;
+      if (!holoRenderer) {
+        console.log('[Raycast] No HoloRenderer found');
+        return null;
+      }
 
       // Find active projectors
       const projectors = [];
@@ -940,6 +943,7 @@
         }
       });
 
+      console.log(`[Raycast] Found ${projectors.length} projector(s)`);
       if (projectors.length === 0) return null;
 
       // Get controller ray in world space
@@ -954,10 +958,14 @@
 
       for (const projector of projectors) {
         const layers = projector.userData.lifLayers || [projector.userData];
+        console.log(`[Raycast] Projector has ${layers.length} layer(s)`);
 
         for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
           const layer = layers[layerIdx];
-          if (!layer.depthTexture || !layer.intrinsics) continue;
+          if (!layer.depthTexture || !layer.intrinsics) {
+            console.log(`[Raycast] Layer ${layerIdx} missing depthTexture or intrinsics`);
+            continue;
+          }
 
           // Get depth texture image data
           const depthTexture = layer.depthTexture;
@@ -968,10 +976,13 @@
             const canvas = depthTexture.image;
             const ctx = canvas.getContext('2d');
             imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            console.log(`[Raycast] Layer ${layerIdx} - CanvasTexture ${canvas.width}x${canvas.height}`);
           } else if (depthTexture.image instanceof HTMLCanvasElement) {
             const ctx = depthTexture.image.getContext('2d');
             imageData = ctx.getImageData(0, 0, depthTexture.image.width, depthTexture.image.height);
+            console.log(`[Raycast] Layer ${layerIdx} - HTMLCanvasElement ${depthTexture.image.width}x${depthTexture.image.height}`);
           } else {
+            console.log(`[Raycast] Layer ${layerIdx} - unsupported texture type:`, depthTexture.constructor.name);
             continue; // Can't read this texture type
           }
 
@@ -979,6 +990,12 @@
           const imgHeight = layer.height;
           const {fx, fy, cx, cy} = layer.intrinsics;
           const {min: invZMin, max: invZMax, baseline = 1.0} = layer.invDepthRange;
+
+          console.log(`[Raycast] Layer ${layerIdx} params:`, {
+            size: `${imgWidth}x${imgHeight}`,
+            intrinsics: {fx, fy, cx, cy},
+            invDepthRange: {invZMin, invZMax, baseline}
+          });
 
           // Transform controller ray to projector-local space
           const projectorMatrixInv = new THREE.Matrix4();
@@ -988,51 +1005,101 @@
           const rayOriginLocal = controllerWorldPos.clone().applyMatrix4(projectorMatrixInv);
           const rayDirLocal = controllerWorldDir.clone().transformDirection(projectorMatrixInv);
 
+          console.log(`[Raycast] Ray origin (local):`, rayOriginLocal.toArray().map(v => v.toFixed(2)));
+          console.log(`[Raycast] Ray direction (local):`, rayDirLocal.toArray().map(v => v.toFixed(2)));
+
           // Sample depth map at pixel coordinates
           function sampleDepthMap(px, py) {
+            if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) return null;
+
+            // Check if texture needs Y-flip (TextureLoader has flipY=true, CanvasTexture has flipY=false)
             const needsFlip = !(depthTexture instanceof THREE.CanvasTexture);
             const pyToUse = needsFlip ? (imgHeight - 1) - Math.floor(py) : Math.floor(py);
-            const pxClamped = Math.max(0, Math.min(imgWidth - 1, Math.floor(px)));
-            const pyClamped = Math.max(0, Math.min(imgHeight - 1, pyToUse));
-            const idx = (pyClamped * imgWidth + pxClamped) * 4;
+
+            const idx = (pyToUse * imgWidth + Math.floor(px)) * 4;
             const depthValue = imageData.data[idx] / 255.0;
             const invZ = invZMax + depthValue * (invZMin - invZMax);
+            if (Math.abs(invZ) < 1e-8) return null;
             return baseline / invZ;
           }
 
-          // Ray marching in inverse depth space (20 steps for performance)
-          const numSteps = 20;
+          // Ray marching in inverse depth space (same approach as desktop raycast)
+          // Start at near plane (invZMin, front) and march toward far plane (invZMax, back)
+          let currentInvZ = invZMin;
+          let stepSize = (invZMin - invZMax) / 100.0; // Initial step: 100 steps across range
+          const minStepSize = (invZMin - invZMax) / 10000.0; // Precision limit
+          let iterations = 0;
+          const maxIterations = 200;
+
           let hitFound = false;
           let hitT = 0;
           let hitPx = 0, hitPy = 0;
 
-          for (let step = 0; step < numSteps; step++) {
-            const t = step / numSteps;
-            const invZ = invZMax + t * (invZMin - invZMax);
-            const testDepth = baseline / invZ;
+          while (iterations < maxIterations && Math.abs(stepSize) > Math.abs(minStepSize)) {
+            iterations++;
 
-            // Ray point at this depth
-            const rayPoint = rayOriginLocal.clone().addScaledVector(rayDirLocal, testDepth);
+            // Current depth along the ray
+            const currentDepth = baseline / currentInvZ;
 
-            // Project to pixel coordinates
-            const px = (rayPoint.x / rayPoint.z) * fx + cx;
-            const py = (rayPoint.y / rayPoint.z) * fy + cy;
+            // Ray position at this depth: rayOrigin + t * rayDir where z = -currentDepth
+            // Solve: rayOrigin.z + t * rayDir.z = -currentDepth
+            const t = (-currentDepth - rayOriginLocal.z) / rayDirLocal.z;
+            const rayPos = rayOriginLocal.clone().addScaledVector(rayDirLocal, t);
 
-            // Check if inside image bounds
-            if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) continue;
+            // Convert to pixel coordinates
+            const px = (rayPos.x * fx / currentDepth) + cx - 0.5;
+            const py = (rayPos.y * fy / currentDepth) + cy - 0.5;
 
-            // Sample actual surface depth at this pixel
+            // Check if within image bounds
+            if (px < 0 || px >= imgWidth || py < 0 || py >= imgHeight) {
+              // Ray is outside image, advance toward far (decreasing invZ)
+              currentInvZ -= stepSize;
+              if (currentInvZ < invZMax) break; // Past far plane
+              continue;
+            }
+
+            // Sample depth map at this pixel
             const surfaceDepth = sampleDepthMap(px, py);
+            if (surfaceDepth === null) {
+              // No valid depth, advance toward far (decreasing invZ)
+              currentInvZ -= stepSize;
+              if (currentInvZ < invZMax) break;
+              continue;
+            }
 
-            // Check if ray is close to surface
-            if (Math.abs(rayPoint.z - surfaceDepth) < 0.01) {
-              hitFound = true;
-              hitT = rayPoint.z;
-              hitPx = px;
-              hitPy = py;
-              break;
+            // Compare ray depth with surface depth
+            if (currentDepth < surfaceDepth) {
+              // Ray is still in front of surface, keep marching toward far (decreasing invZ)
+              currentInvZ -= stepSize;
+              if (currentInvZ < invZMax) break; // Past far plane
+            } else {
+              // Ray has passed through surface, we overshot - backtrack and refine
+              currentInvZ += stepSize;
+              stepSize /= 2.0; // Halve step size
+              currentInvZ -= stepSize; // Advance with smaller step
             }
           }
+
+          // Check if we converged to a valid hit
+          if (iterations < maxIterations || Math.abs(stepSize) <= Math.abs(minStepSize)) {
+            const finalDepth = baseline / currentInvZ;
+            const t = (-finalDepth - rayOriginLocal.z) / rayDirLocal.z;
+            const rayPosProj = rayOriginLocal.clone().addScaledVector(rayDirLocal, t);
+
+            // Check if valid
+            const px = (rayPosProj.x * fx / finalDepth) + cx - 0.5;
+            const py = (rayPosProj.y * fy / finalDepth) + cy - 0.5;
+
+            if (px >= 0 && px < imgWidth && py >= 0 && py < imgHeight) {
+              hitFound = true;
+              hitT = t;
+              hitPx = px;
+              hitPy = py;
+              console.log(`[Raycast] Layer ${layerIdx} converged in ${iterations} iterations at pixel (${px.toFixed(1)}, ${py.toFixed(1)})`);
+            }
+          }
+
+          console.log(`[Raycast] Layer ${layerIdx} march: iterations=${iterations}, hit=${hitFound}`);
 
           if (hitFound) {
             // Calculate world-space hit point
@@ -1045,7 +1112,8 @@
               closestHit = {
                 hit: true,
                 point: hitPointWorld,
-                uv: new THREE.Vector2(hitPx / imgWidth, hitPy / imgHeight),
+                // Flip Y: pixel coordinates have Y=0 at top, but shader s1 expects Y=0 at bottom
+                uv: new THREE.Vector2(hitPx / imgWidth, 1.0 - (hitPy / imgHeight)),
                 layer: layerIdx,
                 distance: distance,
                 projector: projector

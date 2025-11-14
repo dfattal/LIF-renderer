@@ -143,6 +143,9 @@ export class HoloProjector extends THREE.Object3D {
     console.log("HoloProjector: Constructing...");
     console.log("  Options:", options);
 
+    // Mark this object as a HoloProjector for raycasting
+    this.userData.isHoloProjector = true;
+
     this.intrinsics = { ...options.intrinsics };
     this.invDepthRange = { ...options.invDepthRange };
 
@@ -278,6 +281,9 @@ export class HoloProjector extends THREE.Object3D {
       renderOrder: 0,
     }];
 
+    // Store in userData for raycasting access
+    this.userData.lifLayers = this.lifLayers;
+
     console.log(`HoloProjector: Populated ${this.lifLayers.length} layer(s)`);
   }
 
@@ -361,6 +367,9 @@ export class HoloProjector extends THREE.Object3D {
       console.log(`Pushing layer ${i} to lifLayers:`, layerData);
       this.lifLayers.push(layerData);
     }
+
+    // Store in userData for raycasting access
+    this.userData.lifLayers = this.lifLayers;
 
     console.log(`HoloProjector: Populated ${this.lifLayers.length} LDI layer(s) from view`);
     console.log('Final lifLayers array:', this.lifLayers);
