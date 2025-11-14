@@ -382,9 +382,16 @@ export class HoloRenderer extends THREE.Mesh {
         if (desktopInStereoMode && projectors.length >= 2) {
           await this.raycastPlaneLeft.toggleViewMode();
           console.log('VR left eye plane: Initialized in STEREO mode (using both views)');
+        } else {
+          console.log('VR left eye plane: Initialized in MONO mode');
         }
 
         this.raycastPlaneLeft.updatePlaneSizeFromCamera(leftCamera, 'LEFT EYE');
+
+        // AVP Diagnostic: Log shader material state
+        const leftMat = this.raycastPlaneLeft.material as THREE.ShaderMaterial;
+        console.log('[AVP DEBUG] Left plane shader compiled:', leftMat.userData.shader !== undefined);
+        console.log('[AVP DEBUG] Left plane uniforms keys:', Object.keys(leftMat.uniforms));
 
         // Set layer to 1 for left eye only
         this.raycastPlaneLeft.layers.set(1);
@@ -505,6 +512,14 @@ export class HoloRenderer extends THREE.Mesh {
       // Update shader uniforms
       this.raycastPlaneLeft.updateProjectorPoses(leftCamera);
       this.raycastPlaneLeft.updateDynamicUniforms(leftCamera, renderer);
+
+      // AVP Diagnostic: Sample a few key uniform values per frame
+      const leftUniforms = (this.raycastPlaneLeft.material as THREE.ShaderMaterial).uniforms;
+      if (Math.random() < 0.01) { // Log 1% of frames to avoid spam
+        console.log('[AVP DEBUG] Left plane f2:', leftUniforms.f2?.value);
+        console.log('[AVP DEBUG] Left plane oRes:', leftUniforms.oRes?.value);
+        console.log('[AVP DEBUG] Left plane uNumLayers:', leftUniforms.uNumLayers?.value);
+      }
     }
 
     // Right eye plane - keep in scene but position using viewer reference space

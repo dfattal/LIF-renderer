@@ -44,6 +44,12 @@ export class RaycastPlane extends THREE.Mesh {
       depthWrite: false,
     });
 
+    // AVP Diagnostic: Add onBeforeCompile hook to catch shader compilation
+    material.onBeforeCompile = (shader) => {
+      console.log('[AVP DEBUG] RaycastPlane shader compiling...');
+      material.userData.shader = shader;
+    };
+
     super(geometry, material);
 
     this.uniforms = uniforms;
