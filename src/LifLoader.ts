@@ -100,7 +100,7 @@ export function lifRotationToQuaternion(
 export async function createHoloProjectorFromLifView(
   view: LifView,
   options?: Partial<HoloProjectorOptions>,
-  baselineMeters: number = 1.0,
+  baselineMeters: number = 0.063,
 ): Promise<HoloProjector> {
   // Dynamic import to avoid circular dependency
   const { HoloProjector } = await import("./HoloProjector");
@@ -150,7 +150,7 @@ export async function createHoloProjectorFromLifView(
     invDepthRange: {
       min: view.inv_z_map.min,
       max: view.inv_z_map.max,
-      baseline: 1.0, // Default, can be overridden
+      baseline: 0.063, // Default, can be overridden
     },
 
     // Merge any custom options
@@ -560,7 +560,7 @@ export async function loadLifFile(file: File): Promise<LoadLifFileResult> {
 
   // Extract baseline from LIF file metadata (convert mm to meters)
   const lifData = data as any;
-  const baselineMeters = lifData.baseline_mm ? lifData.baseline_mm / 1000 : 1.0;
+  const baselineMeters = lifData.baseline_mm ? lifData.baseline_mm / 1000 : 0.063;
   console.log('LIF baseline:', lifData.baseline_mm, 'mm =', baselineMeters, 'm');
 
   const projectors = await Promise.all(

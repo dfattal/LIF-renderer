@@ -103,7 +103,7 @@ export class HoloProjector extends THREE.Object3D {
       invDepthRange: {
         min: view.inv_z_map.min,
         max: view.inv_z_map.max,
-        baseline: 1.0, // Default, can be overridden
+        baseline: 0.063, // Default, can be overridden
       },
 
       // Merge any custom options
@@ -391,7 +391,7 @@ function createFrustumHelper(projector: HoloProjector): THREE.Group {
   const {
     min: invZMin,
     max: invZMax,
-    baseline = 1.0,
+    baseline = 0.063,
   } = projector.invDepthRange;
 
   // Calculate depths from inverse depth range

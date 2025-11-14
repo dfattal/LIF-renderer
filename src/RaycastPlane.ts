@@ -467,7 +467,7 @@ export class RaycastPlane extends THREE.Mesh {
         this.uniforms.uDisparityMap.value[i] = textures.depthMask;
 
         // Set inverse depth range (scale by 1/baseline_mm to convert to normalized space)
-        const baseline_mm = layer.invDepthRange.baseline ?? 0.045;
+        const baseline_mm = layer.invDepthRange.baseline ?? 0.063;
         this.uniforms.invZmin.value[i] = layer.invDepthRange.min / baseline_mm;
         this.uniforms.invZmax.value[i] = layer.invDepthRange.max / baseline_mm;
 
@@ -510,7 +510,7 @@ export class RaycastPlane extends THREE.Mesh {
           if (texturesL) {
             this.uniforms.uImageL.value[i] = texturesL.rgb;
             this.uniforms.uDisparityMapL.value[i] = texturesL.depthMask;
-            const baseline_mm_L = layerL.invDepthRange.baseline ?? 0.045;
+            const baseline_mm_L = layerL.invDepthRange.baseline ?? 0.063;
             this.uniforms.invZminL.value[i] = layerL.invDepthRange.min / baseline_mm_L;
             this.uniforms.invZmaxL.value[i] = layerL.invDepthRange.max / baseline_mm_L;
             this.uniforms.f1L.value[i] = layerL.intrinsics.fx;
@@ -525,7 +525,7 @@ export class RaycastPlane extends THREE.Mesh {
           if (texturesR) {
             this.uniforms.uImageR.value[i] = texturesR.rgb;
             this.uniforms.uDisparityMapR.value[i] = texturesR.depthMask;
-            const baseline_mm_R = layerR.invDepthRange.baseline ?? 0.045;
+            const baseline_mm_R = layerR.invDepthRange.baseline ?? 0.063;
             this.uniforms.invZminR.value[i] = layerR.invDepthRange.min / baseline_mm_R;
             this.uniforms.invZmaxR.value[i] = layerR.invDepthRange.max / baseline_mm_R;
             this.uniforms.f1R.value[i] = layerR.intrinsics.fx;

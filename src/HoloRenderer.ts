@@ -119,7 +119,7 @@ export class HoloRenderer extends THREE.Mesh {
       // Inverse depth range
       invZMin: { value: 0.1 },
       invZMax: { value: 0.01 },
-      baseline: { value: 1.0 },
+      baseline: { value: 0.063 },
 
       // Mesh rendering parameters
       meshMode: { value: 1.0 }, // Always 1 for connected mesh
@@ -236,7 +236,7 @@ export class HoloRenderer extends THREE.Mesh {
     // Update uniforms
     projector.updateMatrixWorld();
     this.uniforms.projectorMatrix.value.copy(projector.matrixWorld);
-    this.uniforms.baseline.value = projector.invDepthRange.baseline ?? 1.0;
+    this.uniforms.baseline.value = projector.invDepthRange.baseline ?? 0.063;
 
     // Update textures
     this.uniforms.rgbTexture.value = layer.rgbTexture || HoloRenderer.EMPTY_TEXTURE;
@@ -642,7 +642,7 @@ export class HoloRenderer extends THREE.Mesh {
 
     this.uniforms.invZMin.value = projector.invDepthRange.min;
     this.uniforms.invZMax.value = projector.invDepthRange.max;
-    this.uniforms.baseline.value = projector.invDepthRange.baseline ?? 1.0;
+    this.uniforms.baseline.value = projector.invDepthRange.baseline ?? 0.063;
 
     this.currentProjector = projector;
   }

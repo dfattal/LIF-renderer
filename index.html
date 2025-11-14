@@ -545,6 +545,10 @@
             isAnimating = false;
             document.getElementById('mode').textContent = 'Free Camera';
             updateControls('free');
+            // Hide orbit center marker
+            if (hitMarker) {
+              hitMarker.visible = false;
+            }
           }
           break;
         case 'KeyF':
