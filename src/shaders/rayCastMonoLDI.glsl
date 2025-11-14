@@ -147,7 +147,11 @@ float isMaskAround_get_val(vec2 xy, sampler2D tex, vec2 iRes) {
 }
 
 // Apply VR controller hit visualization (red Gaussian patches)
-vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex) {
+// Only paint if disparity variation is within 5% of disparity range
+vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex, sampler2D depthTex, float invZmin, float invZmax, vec2 iRes) {
+    // 5% threshold in invZ (disparity) space
+    float disparityThreshold = 0.05 * (invZmin - invZmax);
+
     // Check controller 1 hit
     if (uControllerHit1.w > 0.5) { // Active
         float hitLayer = uControllerHit1.z;
@@ -156,8 +160,25 @@ vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex) {
             // Flip Y sign to match s1 coordinate system
             vec2 hitUV = vec2(uControllerHit1.x - 0.5, -(uControllerHit1.y - 0.5));
             float dist = length(s1 - hitUV);
-            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
-            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+
+            // Sample invZ (disparity) at hit point and current point
+            // Note: Need to flip Y back when sampling texture (hitUV already has Y flipped for comparison)
+            vec2 hitUVForSampling = vec2(uControllerHit1.x, 1.0 - uControllerHit1.y);
+            float hitInvZ = readDisp(depthTex, hitUVForSampling, invZmin, invZmax, iRes);
+            float currentInvZ = readDisp(depthTex, s1 + 0.5, invZmin, invZmax, iRes);
+
+            // Check mask alpha at current pixel (alpha channel contains mask)
+            vec2 currentUV = s1 + 0.5;
+            float maskAlpha = texture(depthTex, vec2(clamp(currentUV.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x),
+                                                      clamp(currentUV.y, 2.0 / iRes.y, 1.0 - 2.0 / iRes.y))).a;
+
+            // Only paint if:
+            // 1. Disparity is similar (within 5% threshold in invZ space)
+            // 2. Pixel is not masked (alpha >= 0.5)
+            if (abs(currentInvZ - hitInvZ) < disparityThreshold && maskAlpha >= 0.5) {
+                float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
+                color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+            }
         }
     }
 
@@ -169,8 +190,25 @@ vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex) {
             // Flip Y sign to match s1 coordinate system
             vec2 hitUV = vec2(uControllerHit2.x - 0.5, -(uControllerHit2.y - 0.5));
             float dist = length(s1 - hitUV);
-            float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
-            color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+
+            // Sample invZ (disparity) at hit point and current point
+            // Note: Need to flip Y back when sampling texture (hitUV already has Y flipped for comparison)
+            vec2 hitUVForSampling = vec2(uControllerHit2.x, 1.0 - uControllerHit2.y);
+            float hitInvZ = readDisp(depthTex, hitUVForSampling, invZmin, invZmax, iRes);
+            float currentInvZ = readDisp(depthTex, s1 + 0.5, invZmin, invZmax, iRes);
+
+            // Check mask alpha at current pixel (alpha channel contains mask)
+            vec2 currentUV = s1 + 0.5;
+            float maskAlpha = texture(depthTex, vec2(clamp(currentUV.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x),
+                                                      clamp(currentUV.y, 2.0 / iRes.y, 1.0 - 2.0 / iRes.y))).a;
+
+            // Only paint if:
+            // 1. Disparity is similar (within 5% threshold in invZ space)
+            // 2. Pixel is not masked (alpha >= 0.5)
+            if (abs(currentInvZ - hitInvZ) < disparityThreshold && maskAlpha >= 0.5) {
+                float gaussian = exp(-dist * dist / (2.0 * uPatchRadius * uPatchRadius));
+                color = mix(color, uPatchColor, gaussian * 0.8); // 80% opacity at center
+            }
         }
     }
 
@@ -249,7 +287,7 @@ vec4 raycasting(vec2 s2, mat3 FSKR2, vec3 C2, mat3 FSKR1, vec3 C1, sampler2D iCh
         vec3 color = readColor(iChannelCol, s1 + .5);
         // Note: layerIndex would need to be passed to this function to apply patches correctly
         // For now, apply patches assuming layer 0
-        color = applyControllerPatches(color, s1, 0.0);
+        color = applyControllerPatches(color, s1, 0.0, iChannelDisp, invZmin, invZmax, iRes);
         return vec4(color, taper(s1 + .5) * isMaskAround_get_val(s1 + .5, iChannelDisp, iRes));
     } else {
         invZ2 = 0.0;
