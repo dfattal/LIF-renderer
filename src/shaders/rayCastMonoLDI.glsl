@@ -42,8 +42,7 @@ uniform vec3 uPatchColor;     // Patch color (red)
                        int(coord.y * iRes.y));
     return texelFetch(iChannel, ivec, 0);
 }*/
-// Note: Using texture2D explicitly for Apple Vision Pro compatibility
-// AVP has issues with #define texture texture2D preprocessor macro
+#define texture texture2D
 
 //float edge = feathering;
 // vec3 background = vec3(1.0);
@@ -54,11 +53,11 @@ float taper(vec2 uv) {
 }
 
 vec3 readColor(sampler2D iChannel, vec2 uv) {
-    // return texture2D(iChannel, uv).rgb * taper(uv) + 0.1 * (1.0 - taper(uv));
-    return texture2D(iChannel, uv).rgb;
+    // return texture(iChannel, uv).rgb * taper(uv) + 0.1 * (1.0 - taper(uv));
+    return texture(iChannel, uv).rgb;
 }
 float readDisp(sampler2D iChannel, vec2 uv, float vMin, float vMax, vec2 iRes) {
-    return texture2D(iChannel, vec2(clamp(uv.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x), clamp(uv.y, 2.0 / iRes.y, 1.0 - 2.0 / iRes.y))).x * (vMin - vMax) + vMax;
+    return texture(iChannel, vec2(clamp(uv.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x), clamp(uv.y, 2.0 / iRes.y, 1.0 - 2.0 / iRes.y))).x * (vMin - vMax) + vMax;
 }
 
 mat3 matFromSlant(vec2 sl) {
@@ -135,7 +134,7 @@ bool isMaskAround(vec2 xy, sampler2D tex, vec2 iRes) {
         for(float y = -1.0; y <= 1.0; y += 1.0) {
             const float maskDilation = 1.5; // prevents some edge artifacts, especially helpful for resized textures
             vec2 offset_xy = xy + maskDilation * vec2(x, y) / iRes;
-            if(texture2D(tex, offset_xy).a < 0.5) {
+            if(texture(tex, offset_xy).a < 0.5) {
                 return true;
             }
         }
@@ -144,7 +143,7 @@ bool isMaskAround(vec2 xy, sampler2D tex, vec2 iRes) {
 }
 
 float isMaskAround_get_val(vec2 xy, sampler2D tex, vec2 iRes) {
-    return texture2D(tex, xy).a;
+    return texture(tex, xy).a;
 }
 
 // Apply VR controller hit visualization (red Gaussian patches)
@@ -170,7 +169,7 @@ vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex, sampler2D dep
 
             // Check mask alpha at current pixel (alpha channel contains mask)
             vec2 currentUV = s1 + 0.5;
-            float maskAlpha = texture2D(depthTex, vec2(clamp(currentUV.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x),
+            float maskAlpha = texture(depthTex, vec2(clamp(currentUV.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x),
                                                       clamp(currentUV.y, 2.0 / iRes.y, 1.0 - 2.0 / iRes.y))).a;
 
             // Only paint if:
@@ -200,7 +199,7 @@ vec3 applyControllerPatches(vec3 color, vec2 s1, float layerIndex, sampler2D dep
 
             // Check mask alpha at current pixel (alpha channel contains mask)
             vec2 currentUV = s1 + 0.5;
-            float maskAlpha = texture2D(depthTex, vec2(clamp(currentUV.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x),
+            float maskAlpha = texture(depthTex, vec2(clamp(currentUV.x, 2.0 / iRes.x, 1.0 - 2.0 / iRes.x),
                                                       clamp(currentUV.y, 2.0 / iRes.y, 1.0 - 2.0 / iRes.y))).a;
 
             // Only paint if:
